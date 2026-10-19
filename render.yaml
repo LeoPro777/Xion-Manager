@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: xion-manager
+    runtime: docker
+    plan: standard
+    region: oregon
+    dockerfilePath: Dockerfile
+    healthCheckPath: /api/v1/billing/account-status
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: USE_SQLITE_FALLBACK
+        value: "false"
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: XION_PAY_BASE_URL
+        value: "https://xion-pay.onrender.com"
+      - key: XION_PAY_TENANT_ID
+        value: "3bf4dff9-402f-42ce-8148-3f7b6450c9e6"
+      - key: XION_PAY_WEBHOOK_SECRET
+        sync: false
+      - key: STORAGE_BACKEND
+        value: "local"

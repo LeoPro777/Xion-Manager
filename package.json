@@ -1,0 +1,10 @@
+{
+  "name": "xion-manager-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend-web run dev",
+    "start": "python start-local.py",
+    "build": "npm --prefix frontend-web run build"
+  }
+}

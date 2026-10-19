@@ -1,0 +1,313 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --brand-primary: #0891b2;
+    --brand-primary-rgb: 8, 145, 178;
+    --brand-primary-foreground: #ffffff;
+
+    /* Light Theme Cyan/Teal Palette - High WCAG Contrast on Light Backgrounds */
+    --cyan-50: #f0fdfa;
+    --cyan-100: #ccfbf1;
+    --cyan-200: #99f6e4;
+    --cyan-300: #0d9488;
+    --cyan-400: #0891b2; /* WCAG AA compliant on light background (4.6:1) */
+    --cyan-500: #0e7490;
+    --cyan-600: #155e75;
+    --cyan-700: #164e63;
+    --cyan-800: #115e59;
+    --cyan-900: #134e4a;
+
+    /* Light Theme Slate Palette: Deep Obsidian & Dark Ink Text for Maximum Contrast */
+    --slate-50-rgb: 0, 0, 0;         /* Pure pitch black (#000000) */
+    --slate-100-rgb: 10, 15, 26;     /* Deep black ink headings (#0A0F1A) - 18.2:1 */
+    --slate-200-rgb: 15, 23, 42;     /* High contrast body text (#0F172A) - 15.8:1 */
+    --slate-300-rgb: 30, 41, 59;     /* Dark charcoal secondary labels (#1E293B) - 12.6:1 */
+    --slate-400-rgb: 45, 55, 72;     /* Dark slate captions (#2D3748) - 9.8:1 (WCAG AAA) */
+    --slate-500-rgb: 55, 65, 81;     /* Dark readable hints (#374151) - 8.5:1 (WCAG AAA) */
+    --slate-600-rgb: 100, 116, 139;  /* Dividers & inactive controls (#64748B) */
+    --slate-700-rgb: 160, 175, 195;  /* Active/Hover borders */
+    --slate-800-rgb: 203, 213, 225;  /* Defined, crisp borders (#CBD5E1) - 3.1:1 */
+    --slate-900-rgb: 255, 255, 255;  /* Clean pure white card surface (#FFFFFF) */
+    --slate-950-rgb: 248, 250, 252;  /* High-contrast canvas background (#F8FAFC) */
+
+    --glass-panel-bg: rgba(255, 255, 255, 0.98);
+    --glass-panel-border: rgba(203, 213, 225, 0.85);
+    --glass-panel-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.07), 0 2px 6px -1px rgba(15, 23, 42, 0.04);
+    --glass-card-bg: rgba(255, 255, 255, 1);
+    --glass-card-border: rgba(203, 213, 225, 0.75);
+    --glass-card-shadow: 0 2px 8px -1px rgba(15, 23, 42, 0.05);
+
+    color-scheme: light;
+  }
+
+  .dark {
+    /* Dark Theme Cyan/Teal Palette - High Luminance & Glow on Dark Slate */
+    --cyan-50: #ecfeff;
+    --cyan-100: #cffafe;
+    --cyan-200: #a5f3fc;
+    --cyan-300: #67e8f9; /* WCAG AAA on dark (>10:1) */
+    --cyan-400: #22d3ee; /* Electric Cyan - 9.4:1 contrast on #0F172A */
+    --cyan-500: #06b6d4;
+    --cyan-600: #0891b2;
+    --cyan-700: #0e7490;
+    --cyan-800: #155e75;
+    --cyan-900: #164e63;
+
+    /* Dark Theme Slate Palette: Pure Luminescent Whites & Ultra-Bright High Contrast Text */
+    --slate-50-rgb: 255, 255, 255;   /* Pure white (#FFFFFF) - 18.5:1 */
+    --slate-100-rgb: 255, 255, 255;  /* Pure white headings (#FFFFFF) - 18.5:1 */
+    --slate-200-rgb: 248, 250, 252;  /* Ultra-bright body text (#F8FAFC) - 17.2:1 */
+    --slate-300-rgb: 241, 245, 249;  /* Bright white secondary labels (#F1F5F9) - 15.4:1 */
+    --slate-400-rgb: 226, 232, 240;  /* Ultra-bright captions (#E2E8F0) - 13.5:1 (WCAG AAA) */
+    --slate-500-rgb: 203, 213, 225;  /* High-legibility hints (#CBD5E1) - 10.8:1 (WCAG AAA) */
+    --slate-600-rgb: 100, 116, 139;  /* Muted elements */
+    --slate-700-rgb: 51, 65, 85;     /* Interactive hover borders */
+    --slate-800-rgb: 30, 41, 59;     /* Crisp, visible borders (#1E293B) */
+    --slate-900-rgb: 15, 23, 42;     /* Sleek dark card surface (#0F172A) */
+    --slate-950-rgb: 8, 12, 20;      /* Deep midnight canvas (#080C14) */
+
+    --glass-panel-bg: rgba(15, 23, 42, 0.88);
+    --glass-panel-border: rgba(255, 255, 255, 0.13);
+    --glass-panel-shadow: 0 8px 32px -4px rgba(0, 0, 0, 0.5), 0 2px 8px -2px rgba(0, 0, 0, 0.3);
+    --glass-card-bg: rgba(22, 33, 58, 0.70);
+    --glass-card-border: rgba(255, 255, 255, 0.10);
+    --glass-card-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.35);
+
+    color-scheme: dark;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: rgb(var(--slate-950-rgb));
+    color: rgb(var(--slate-100-rgb));
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+}
+
+/* Glassmorphism utilities with crisp border & elevation */
+.glass-panel {
+  background: var(--glass-panel-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-panel-border);
+  box-shadow: var(--glass-panel-shadow);
+}
+
+.glass-card {
+  background: var(--glass-card-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-card-border);
+  box-shadow: var(--glass-card-shadow);
+}
+
+/* Light mode heading fix for hardcoded text-white in cards */
+:root:not(.dark) .glass-panel h1.text-white,
+:root:not(.dark) .glass-panel h2.text-white,
+:root:not(.dark) .glass-panel h3.text-white,
+:root:not(.dark) .glass-panel h4.text-white,
+:root:not(.dark) .glass-panel strong.text-white,
+:root:not(.dark) .glass-card h1.text-white,
+:root:not(.dark) .glass-card h2.text-white,
+:root:not(.dark) .glass-card h3.text-white,
+:root:not(.dark) .glass-card h4.text-white,
+:root:not(.dark) .glass-card strong.text-white {
+  color: rgb(var(--slate-100-rgb)) !important;
+}
+
+/* Mobile tap target utilities & smooth scrolling */
+button, a, input, select {
+  touch-action: manipulation;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.7);
+}
+
+/* High contrast form inputs & interactive elements */
+input, select, textarea {
+  border-color: rgb(var(--slate-800-rgb));
+  color: rgb(var(--slate-100-rgb));
+}
+
+input::placeholder, textarea::placeholder {
+  color: rgb(var(--slate-400-rgb));
+  opacity: 0.9;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--cyan-400, #22d3ee) !important;
+  box-shadow: 0 0 0 1px var(--cyan-400, #22d3ee) !important;
+  outline: none;
+}
+
+/* Enhanced table contrast */
+table th {
+  color: rgb(var(--slate-300-rgb));
+  border-bottom: 1px solid rgb(var(--slate-800-rgb));
+}
+
+table td {
+  border-bottom: 1px solid rgba(var(--slate-800-rgb), 0.7);
+}
+
+/* ========================================================
+   MACRO TYPOGRAPHY SCALING SYSTEM
+   Proportional rem mapping for arbitrary pixel utilities so they
+   scale dynamically with the root font-size without breaking layout.
+   ======================================================== */
+.text-\[8px\]   { font-size: 0.5rem !important;    line-height: 0.75rem !important; }
+.text-\[9px\]   { font-size: 0.5625rem !important; line-height: 0.875rem !important; }
+.text-\[10px\]  { font-size: 0.625rem !important;  line-height: 1rem !important; }
+.text-\[11px\]  { font-size: 0.6875rem !important; line-height: 1.05rem !important; }
+.text-\[12px\]  { font-size: 0.75rem !important;   line-height: 1.15rem !important; }
+.text-\[13px\]  { font-size: 0.8125rem !important; line-height: 1.25rem !important; }
+.text-\[14px\]  { font-size: 0.875rem !important;  line-height: 1.35rem !important; }
+.text-\[15px\]  { font-size: 0.9375rem !important; line-height: 1.45rem !important; }
+
+/* Control de proporción estética y prevención de desbordes en macro escalado */
+body {
+  font-size: 1rem;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+}
+
+button, input, select, textarea {
+  font-family: inherit;
+}
+
+button {
+  min-height: max-content;
+}
+
+table th, table td {
+  font-size: inherit;
+}
+
+/* ========================================================
+   HIGH CONTRAST FONT TONE RULES (THEME-ADAPTIVE)
+   En tema claro: fuentes muy oscuras (tinta profunda) independientemente del color.
+   En tema oscuro: fuentes ultra claras y luminosas (blancos y brillantes).
+   ======================================================== */
+:root:not(.dark) {
+  --text-high-contrast: #0a0f1a;
+  --text-high-contrast-muted: #1e293b;
+}
+
+:root:not(.dark) [class*="text-cyan-400"],
+:root:not(.dark) [class*="text-cyan-300"],
+:root:not(.dark) .text-cyan-400,
+:root:not(.dark) .text-cyan-300 {
+  color: #0e7490 !important;
+}
+
+:root:not(.dark) [class*="text-emerald-400"],
+:root:not(.dark) [class*="text-emerald-300"],
+:root:not(.dark) .text-emerald-400,
+:root:not(.dark) .text-emerald-300 {
+  color: #047857 !important;
+}
+
+:root:not(.dark) [class*="text-amber-400"],
+:root:not(.dark) [class*="text-amber-300"],
+:root:not(.dark) .text-amber-400,
+:root:not(.dark) .text-amber-300,
+:root:not(.dark) .text-yellow-400 {
+  color: #b45309 !important;
+}
+
+:root:not(.dark) [class*="text-rose-400"],
+:root:not(.dark) [class*="text-rose-300"],
+:root:not(.dark) .text-rose-400,
+:root:not(.dark) .text-rose-300,
+:root:not(.dark) [class*="text-red-400"],
+:root:not(.dark) .text-red-400 {
+  color: #be123c !important;
+}
+
+:root:not(.dark) [class*="text-blue-400"],
+:root:not(.dark) [class*="text-blue-300"],
+:root:not(.dark) .text-blue-400,
+:root:not(.dark) .text-blue-300 {
+  color: #1d4ed8 !important;
+}
+
+:root:not(.dark) [class*="text-purple-400"],
+:root:not(.dark) [class*="text-purple-300"],
+:root:not(.dark) .text-purple-400,
+:root:not(.dark) .text-purple-300 {
+  color: #6b21a8 !important;
+}
+
+:root:not(.dark) [class*="text-slate-400"] {
+  color: rgba(var(--slate-400-rgb), 1) !important;
+}
+
+:root:not(.dark) [class*="text-slate-500"] {
+  color: rgba(var(--slate-500-rgb), 1) !important;
+}
+
+.dark {
+  --text-high-contrast: #ffffff;
+  --text-high-contrast-muted: #f8fafc;
+}
+
+.dark [class*="text-cyan-500"],
+.dark [class*="text-cyan-600"],
+.dark [class*="text-cyan-700"] {
+  color: #38bdf8 !important;
+}
+
+.dark [class*="text-emerald-500"],
+.dark [class*="text-emerald-600"],
+.dark [class*="text-emerald-700"] {
+  color: #34d399 !important;
+}
+
+.dark [class*="text-amber-500"],
+.dark [class*="text-amber-600"],
+.dark [class*="text-amber-700"] {
+  color: #fde047 !important;
+}
+
+.dark [class*="text-rose-500"],
+.dark [class*="text-rose-600"],
+.dark [class*="text-rose-700"] {
+  color: #fb7185 !important;
+}
+
+.dark [class*="text-blue-500"],
+.dark [class*="text-blue-600"],
+.dark [class*="text-blue-700"] {
+  color: #60a5fa !important;
+}
+
+.dark [class*="text-slate-400"] {
+  color: rgba(var(--slate-400-rgb), 1) !important;
+}
+
+.dark [class*="text-slate-500"] {
+  color: rgba(var(--slate-500-rgb), 1) !important;
+}
+

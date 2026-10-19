@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: xion_manager_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-xion_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-xion_seguro_db_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-xion_manager_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xion_admin -d xion_manager_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+    container_name: xion_manager_backend
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - uploads_data:/app/data/uploads
+    ports:
+      - "8000:8000"
+
+  frontend-web:
+    build:
+      context: ./frontend-web
+      dockerfile: ../docker/frontend.Dockerfile
+    container_name: xion_manager_web
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  postgres_data:
+  uploads_data:
