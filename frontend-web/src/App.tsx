@@ -21,7 +21,9 @@ export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
 
   useEffect(() => {
-    api.loginBypass('OWNER').then(setCurrentUser);
+    if (import.meta.env.DEV) {
+      api.loginBypass('OWNER').then(setCurrentUser);
+    }
     api.getPreferences().then(applySystemPreferences);
   }, []);
 

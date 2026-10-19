@@ -54,35 +54,37 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
           </p>
         </div>
 
-        {/* Bypass Dev Banner */}
-        <div className="glass-panel p-5 rounded-2xl border border-cyan-500/40 bg-cyan-950/20 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-cyan-400 flex items-center gap-1.5 uppercase tracking-wider">
-              <Zap className="w-4 h-4 fill-cyan-400" />
-              Bypass de Acceso Rápido (Modo Demo / Dev)
-            </span>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 font-mono">
-              Sin Contraseña
-            </span>
-          </div>
-          <p className="text-xs text-slate-300">
-            Selecciona cualquier rol para iniciar sesión instantáneamente y probar los permisos RBAC correspondientes:
-          </p>
+        {/* Bypass Dev Banner (Development mode only) */}
+        {import.meta.env.DEV && (
+          <div className="glass-panel p-5 rounded-2xl border border-cyan-500/40 bg-cyan-950/20 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-cyan-400 flex items-center gap-1.5 uppercase tracking-wider">
+                <Zap className="w-4 h-4 fill-cyan-400" />
+                Bypass de Acceso Rápido (Modo Demo / Dev)
+              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 font-mono">
+                Sin Contraseña
+              </span>
+            </div>
+            <p className="text-xs text-slate-300">
+              Selecciona cualquier rol para iniciar sesión instantáneamente y probar los permisos RBAC correspondientes:
+            </p>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1">
-            {rolesList.map((r) => (
-              <button
-                key={r.role}
-                onClick={() => handleBypassRole(r.role)}
-                disabled={loading}
-                className={`p-2.5 rounded-xl border text-left bg-gradient-to-br transition-all hover:scale-105 active:scale-95 ${r.color}`}
-              >
-                <div className="font-bold text-xs truncate">{r.label}</div>
-                <div className="text-[10px] text-slate-400 truncate mt-0.5">{r.desc}</div>
-              </button>
-            ))}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1">
+              {rolesList.map((r) => (
+                <button
+                  key={r.role}
+                  onClick={() => handleBypassRole(r.role)}
+                  disabled={loading}
+                  className={`p-2.5 rounded-xl border text-left bg-gradient-to-br transition-all hover:scale-105 active:scale-95 ${r.color}`}
+                >
+                  <div className="font-bold text-xs truncate">{r.label}</div>
+                  <div className="text-[10px] text-slate-400 truncate mt-0.5">{r.desc}</div>
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Standard Credentials Form */}
         <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">

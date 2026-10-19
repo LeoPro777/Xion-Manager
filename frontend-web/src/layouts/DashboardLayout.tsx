@@ -315,26 +315,28 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
                     </button>
                   </div>
 
-                  {/* Fast RBAC Switch Section */}
-                  <div className="pt-2 border-t border-slate-800/80">
-                    <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                      <Zap className="w-3 h-3 text-cyan-400" />
-                      <span>Bypass / Cambiar Rol</span>
+                  {/* Fast RBAC Switch Section (Dev Mode Only) */}
+                  {import.meta.env.DEV && (
+                    <div className="pt-2 border-t border-slate-800/80">
+                      <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <Zap className="w-3 h-3 text-cyan-400" />
+                        <span>Bypass / Cambiar Rol</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 mt-1">
+                        {(['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'SUPERVISOR', 'AUDITOR', 'CASHIER'] as Role[]).map((r) => (
+                          <button
+                            key={r}
+                            onClick={() => handleSwitchRole(r)}
+                            className={`text-left px-2 py-1.5 rounded-lg text-[10px] font-semibold transition-colors flex items-center justify-between ${currentUser.role === r ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                              }`}
+                          >
+                            <span className="truncate">{r}</span>
+                            {currentUser.role === r && <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-1 mt-1">
-                      {(['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'SUPERVISOR', 'AUDITOR', 'CASHIER'] as Role[]).map((r) => (
-                        <button
-                          key={r}
-                          onClick={() => handleSwitchRole(r)}
-                          className={`text-left px-2 py-1.5 rounded-lg text-[10px] font-semibold transition-colors flex items-center justify-between ${currentUser.role === r ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                            }`}
-                        >
-                          <span className="truncate">{r}</span>
-                          {currentUser.role === r && <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
