@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     SUPABASE_KEY: Optional[str] = None
     SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
 
-    # Optional SQLite local fallback for offline development
-    USE_SQLITE_FALLBACK: bool = True
+    # SQLite local fallback: False por defecto para forzar uso prioritario de PostgreSQL / Supabase
+    USE_SQLITE_FALLBACK: bool = False
     SQLITE_DB_PATH: str = "xion_manager_dev.db"
 
     # Frontend build static files directory
@@ -66,7 +66,11 @@ class Settings(BaseSettings):
 
     @property
     def ASYNC_DATABASE_URL(self) -> str:
+        # Prioridad absoluta: DATABASE_URL directa o SUPABASE_URL si contiene esquema postgres
         raw_url = self.DATABASE_URL or os.environ.get("DATABASE_URL")
+        if not raw_url and self.SUPABASE_URL and ("postgres://" in self.SUPABASE_URL or "postgresql://" in self.SUPABASE_URL):
+            raw_url = self.SUPABASE_URL
+
         if raw_url:
             clean_url = raw_url.strip()
             # Normalizar driver para asyncpg

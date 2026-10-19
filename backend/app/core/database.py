@@ -8,10 +8,10 @@ db_url = settings.ASYNC_DATABASE_URL
 
 connect_args = {}
 if "sqlite" not in db_url:
-    raw_db_str = (settings.DATABASE_URL or os.environ.get("DATABASE_URL") or "").lower()
+    raw_db_str = (settings.DATABASE_URL or os.environ.get("DATABASE_URL") or settings.SUPABASE_URL or "").lower()
+    is_supabase = "supabase.co" in db_url or "pooler.supabase.com" in db_url or "supabase" in raw_db_str
     if (
-        "supabase.co" in db_url
-        or "pooler.supabase.com" in db_url
+        is_supabase
         or "sslmode=" in raw_db_str
         or settings.POSTGRES_SSL
         or settings.ENVIRONMENT == "production"
@@ -20,6 +20,10 @@ if "sqlite" not in db_url:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         connect_args["ssl"] = ctx
+
+    if is_supabase or ":6543" in db_url or "pooler" in db_url:
+        connect_args["statement_cache_size"] = 0
+        connect_args["prepared_statement_cache_size"] = 0
 
 engine = create_async_engine(
     db_url,
