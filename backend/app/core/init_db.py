@@ -49,7 +49,23 @@ async def seed_initial_data():
             )
             session.add_all([plan_emp, plan_com, plan_corp])
             await session.commit()
-            print("✓ Planes de suscripción base sembrados exitosamente.")
+        # 2. Verificar si existe negocio principal
+        biz_result = await session.execute(select(Business).limit(1))
+        existing_biz = biz_result.scalar_one_or_none()
+        if not existing_biz:
+            default_biz = Business(
+                id="biz-101",
+                legal_name="Comercializadora Xion C.A.",
+                trade_name="Xion Supermarket & Retail",
+                tax_id="J-12345678-9",
+                phone="+58 414-1112233",
+                email="contacto@xion.com",
+                is_active=True
+            )
+            session.add(default_biz)
+            await session.commit()
+            print("✓ Negocio corporativo inicial sembrado exitosamente.")
+
 
 if __name__ == "__main__":
     asyncio.run(seed_initial_data())

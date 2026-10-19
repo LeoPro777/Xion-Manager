@@ -16,7 +16,8 @@ from app.schemas.schemas import (
     XionPayConfigResponse, XionPayPlanSchema, XionPayDestinationAccountSchema,
     XionPaySyncPayload, XionPaySyncResponse,
     XionPayLeadCreate, XionPayLeadResponse, XionPayWebhookResponse,
-    StockAdjustmentDTO, CategoryCreate, CategoryResponse, SupplierPayableLedgerItem
+    StockAdjustmentDTO, CategoryCreate, CategoryResponse, SupplierPayableLedgerItem,
+    GoogleAuthRequest, StandardLoginRequest, AuthTokenResponse
 )
 from app.services.image_service import (
     save_and_process_payment_method_image,
@@ -25,6 +26,11 @@ from app.services.image_service import (
 )
 from app.services.storage_service import storage_service
 from app.services.xion_pay_service import XionPayService
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
+from app.models.entities import User as UserModel, Business as BusinessModel
+from app.core.security import create_access_token, verify_google_id_token, get_password_hash, verify_password
 
 api_router = APIRouter()
 
@@ -332,17 +338,190 @@ async def onboard_trial_lead(lead: XionPayLeadCreate):
     return result
 
 
-# 0. Auth Login Bypass
+# 0. Authentication Endpoints (Google OAuth2 + JWT)
+@api_router.post("/auth/google", response_model=AuthTokenResponse)
+async def login_google(payload: GoogleAuthRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Autenticación con Google Identity Services (OAuth2).
+    Verifica el token de Google y emite un JWT firmado para la sesión de Xion-Manager.
+    """
+    google_data = await verify_google_id_token(payload.id_token)
+    email = google_data["email"].lower().strip()
+    name = google_data.get("name") or email.split("@")[0]
+
+    # Verificar si el usuario ya existe en Supabase
+    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        # Obtener o crear negocio predeterminado para asociar al usuario
+        biz_result = await db.execute(select(BusinessModel).limit(1))
+        biz = biz_result.scalar_one_or_none()
+        if not biz:
+            biz = BusinessModel(
+                id="biz-101",
+                legal_name="Comercializadora Xion C.A.",
+                trade_name="Xion Supermarket & Retail",
+                tax_id="J-12345678-9",
+                phone="+58 414-1112233",
+                email="contacto@xion.com",
+                is_active=True
+            )
+            db.add(biz)
+            await db.commit()
+            await db.refresh(biz)
+
+        business_id = biz.id
+
+        # Asignar rol: el primer usuario creado es OWNER, los siguientes ADMIN
+        users_count_res = await db.execute(select(UserModel))
+        users_count = len(users_count_res.scalars().all())
+        role = "OWNER" if users_count == 0 else "ADMIN"
+
+        user = UserModel(
+            email=email,
+            hashed_password=get_password_hash("oauth2-google-managed"),
+            full_name=name,
+            role=role,
+            business_id=business_id,
+            approval_status="APPROVED",
+            is_active=True
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La cuenta se encuentra inactiva. Contacte al administrador."
+        )
+
+    # Generar JWT firmado de Xion-Manager
+    token_claims = {
+        "sub": user.id,
+        "email": user.email,
+        "role": user.role,
+        "business_id": user.business_id,
+        "full_name": user.full_name
+    }
+    jwt_token = create_access_token(token_claims)
+
+    return {
+        "access_token": jwt_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,
+            "business_id": user.business_id,
+            "branch_id": user.branch_id,
+            "approval_status": user.approval_status,
+            "is_active": user.is_active,
+            "created_at": user.created_at.isoformat() if user.created_at else None
+        }
+    }
+
+@api_router.post("/auth/login", response_model=AuthTokenResponse)
+async def login_standard(payload: StandardLoginRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Autenticación estándar mediante correo electrónico y contraseña con emisión de JWT.
+    """
+    email = payload.email.lower().strip()
+    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        # Fallback para usuario admin inicial si aún no fue sembrado
+        if email == "admin@xion.com" and payload.password:
+            biz_result = await db.execute(select(BusinessModel).limit(1))
+            biz = biz_result.scalar_one_or_none()
+            if not biz:
+                biz = BusinessModel(
+                    id="biz-101",
+                    legal_name="Comercializadora Xion C.A.",
+                    trade_name="Xion Supermarket & Retail",
+                    tax_id="J-12345678-9",
+                    phone="+58 414-1112233",
+                    email="contacto@xion.com",
+                    is_active=True
+                )
+                db.add(biz)
+                await db.commit()
+                await db.refresh(biz)
+
+            user = UserModel(
+                email=email,
+                hashed_password=get_password_hash(payload.password),
+                full_name="Administrador Xion",
+                role="OWNER",
+                business_id=biz.id,
+                approval_status="APPROVED",
+                is_active=True
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Credenciales de acceso inválidas"
+            )
+    else:
+        if user.hashed_password != "oauth2-google-managed" and not verify_password(payload.password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Credenciales de acceso inválidas"
+            )
+
+    token_claims = {
+        "sub": user.id,
+        "email": user.email,
+        "role": user.role,
+        "business_id": user.business_id,
+        "full_name": user.full_name
+    }
+    jwt_token = create_access_token(token_claims)
+
+    return {
+        "access_token": jwt_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,
+            "business_id": user.business_id,
+            "branch_id": user.branch_id,
+            "approval_status": user.approval_status,
+            "is_active": user.is_active,
+            "created_at": user.created_at.isoformat() if user.created_at else None
+        }
+    }
+
 @api_router.post("/auth/login-bypass")
 async def login_bypass(role: str = Body(default="OWNER", embed=True)):
-    return {
+    """
+    Bypass de desarrollo para testing ágil de roles RBAC con token JWT firmado.
+    """
+    user_data = {
         "id": f"usr-{role.lower()}-01",
         "email": f"{role.lower()}@xion.com",
         "full_name": f"Usuario ({role})",
         "role": role,
         "approval_status": "APPROVED",
-        "is_active": True,
-        "access_token": "mock-jwt-bypass-token",
+        "is_active": True
+    }
+    jwt_token = create_access_token({
+        "sub": user_data["id"],
+        "email": user_data["email"],
+        "role": user_data["role"],
+        "full_name": user_data["full_name"]
+    })
+    return {
+        **user_data,
+        "access_token": jwt_token,
         "token_type": "bearer"
     }
 

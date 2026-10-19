@@ -752,7 +752,70 @@ export const api = {
   },
 
   // Auth & Session
+  async loginWithGoogle(idToken: string): Promise<User> {
+    try {
+      const res = await fetch('/api/v1/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_token: idToken })
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Error al autenticar con Google OAuth');
+      }
+      const data = await res.json();
+      if (data.access_token) {
+        localStorage.setItem('xion_access_token', data.access_token);
+        localStorage.setItem('xion_user', JSON.stringify(data.user));
+      }
+      return data.user as User;
+    } catch (err: any) {
+      console.error('Google OAuth API error:', err);
+      throw err;
+    }
+  },
+
+  async loginWithCredentials(email: string, password: string): Promise<User> {
+    try {
+      const res = await fetch('/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Credenciales de acceso inválidas');
+      }
+      const data = await res.json();
+      if (data.access_token) {
+        localStorage.setItem('xion_access_token', data.access_token);
+        localStorage.setItem('xion_user', JSON.stringify(data.user));
+      }
+      return data.user as User;
+    } catch (err: any) {
+      console.error('Credentials login error:', err);
+      throw err;
+    }
+  },
+
   async loginBypass(role: Role = 'OWNER'): Promise<User> {
+    try {
+      const res = await fetch('/api/v1/auth/login-bypass', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.access_token) {
+          localStorage.setItem('xion_access_token', data.access_token);
+          localStorage.setItem('xion_user', JSON.stringify(data));
+        }
+      }
+    } catch (e) {
+      // Fallback silently if offline dev
+    }
+
     const roleLabels: Record<Role, string> = {
       OWNER: 'Juan Delgado (Dueño)',
       ADMIN: 'Carlos Mendoza (Administrador)',

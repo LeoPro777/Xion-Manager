@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 *.env
+Secrets/
+client_secret_*.json
+
 
 # Python & Virtual Environments
 __pycache__/

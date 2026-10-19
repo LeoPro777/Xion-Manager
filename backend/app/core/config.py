@@ -37,6 +37,10 @@ class Settings(BaseSettings):
 
     GOOGLE_MAPS_API_KEY: str = "AIzaSy_mock_google_maps_key"
 
+    # Google OAuth 2.0 Credentials
+    GOOGLE_CLIENT_ID: Optional[str] = None
+    GOOGLE_CLIENT_SECRET: Optional[str] = None
+
     # Cloudflare R2 / S3-compatible Object Storage
     STORAGE_BACKEND: str = "r2"  # "r2" | "local"
     LOCAL_STORAGE_PATH: str = "./uploads"

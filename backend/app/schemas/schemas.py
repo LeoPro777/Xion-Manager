@@ -437,6 +437,19 @@ class XionPayWebhookResponse(BaseModel):
     processed: bool = True
     message: str
 
+class GoogleAuthRequest(BaseModel):
+    id_token: str = Field(..., description="Google ID Token / Credential provisto por Google Identity Services")
+
+class StandardLoginRequest(BaseModel):
+    email: EmailStr = Field(..., description="Correo corporativo o de usuario")
+    password: str = Field(..., min_length=4, description="Contraseña del usuario")
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: Dict[str, Any]
+
+
 
 
 
