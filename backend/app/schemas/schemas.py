@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 
@@ -441,7 +441,7 @@ class GoogleAuthRequest(BaseModel):
     id_token: str = Field(..., description="Google ID Token / Credential provisto por Google Identity Services")
 
 class StandardLoginRequest(BaseModel):
-    email: EmailStr = Field(..., description="Correo corporativo o de usuario")
+    email: str = Field(..., description="Correo corporativo o de usuario")
     password: str = Field(..., min_length=4, description="Contraseña del usuario")
 
 class AuthTokenResponse(BaseModel):
