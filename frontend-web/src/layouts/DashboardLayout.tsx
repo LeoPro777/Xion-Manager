@@ -98,6 +98,15 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
   useEffect(() => {
     api.getNotifications().then(setNotifications);
     api.getExchangeRate().then((cfg) => setExchangeRate(cfg.current_exchange_rate_bs));
+
+    const handleSettingsUpdated = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail?.current_exchange_rate_bs) {
+        setExchangeRate(Number(customEvent.detail.current_exchange_rate_bs));
+      }
+    };
+    window.addEventListener('xion:settings-updated', handleSettingsUpdated);
+    return () => window.removeEventListener('xion:settings-updated', handleSettingsUpdated);
   }, []);
 
   const navItems = [

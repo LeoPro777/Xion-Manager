@@ -726,6 +726,25 @@ export const api = {
 
   // Exchange Rate & System Settings
   async getExchangeRate(): Promise<SystemSettings> {
+    try {
+      const res = await fetch('/api/v1/settings/exchange-rate');
+      if (res.ok) {
+        const data = await res.json();
+        return {
+          id: data.id || 'cfg-001',
+          business_id: data.business_id || 'biz-101',
+          current_exchange_rate_bs: Number(data.current_exchange_rate_bs) || 37.50,
+          tax_rate: Number(data.tax_rate) || 16.0,
+          enable_taxes: Boolean(data.enable_taxes),
+          auto_sync_pos: Boolean(data.auto_sync_pos),
+          currency_symbol: data.currency_symbol || 'Bs.',
+          updated_at: data.updated_at || new Date().toISOString()
+        };
+      }
+    } catch (err) {
+      console.warn('Fallback a configuración local:', err);
+    }
+
     return {
       id: 'cfg-001',
       business_id: 'biz-101',
@@ -739,16 +758,56 @@ export const api = {
   },
 
   async updateExchangeRate(rateData: Partial<SystemSettings>): Promise<SystemSettings> {
-    return {
-      id: 'cfg-001',
-      business_id: 'biz-101',
-      current_exchange_rate_bs: rateData.current_exchange_rate_bs ?? 37.50,
-      tax_rate: rateData.tax_rate ?? 16.0,
+    const payload = {
+      current_exchange_rate_bs: Number(rateData.current_exchange_rate_bs) || 37.50,
+      tax_rate: Number(rateData.tax_rate ?? 16.0),
       enable_taxes: rateData.enable_taxes ?? true,
       auto_sync_pos: rateData.auto_sync_pos ?? true,
-      currency_symbol: rateData.currency_symbol ?? 'Bs.',
+      currency_symbol: rateData.currency_symbol ?? 'Bs.'
+    };
+
+    try {
+      const res = await fetch('/api/v1/settings/exchange-rate', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const updated: SystemSettings = {
+          id: data.id || 'cfg-001',
+          business_id: data.business_id || 'biz-101',
+          current_exchange_rate_bs: Number(data.current_exchange_rate_bs) || payload.current_exchange_rate_bs,
+          tax_rate: Number(data.tax_rate) || payload.tax_rate,
+          enable_taxes: Boolean(data.enable_taxes),
+          auto_sync_pos: Boolean(data.auto_sync_pos),
+          currency_symbol: data.currency_symbol || payload.currency_symbol,
+          updated_at: data.updated_at || new Date().toISOString()
+        };
+        // Emitir evento global de sincronización en tiempo real para DashboardLayout, InventoryPage, etc.
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('xion:settings-updated', { detail: updated }));
+        }
+        return updated;
+      }
+    } catch (err) {
+      console.error('Error al actualizar tasa cambiaria en backend:', err);
+    }
+
+    const fallback: SystemSettings = {
+      id: 'cfg-001',
+      business_id: 'biz-101',
+      current_exchange_rate_bs: payload.current_exchange_rate_bs,
+      tax_rate: payload.tax_rate,
+      enable_taxes: payload.enable_taxes,
+      auto_sync_pos: payload.auto_sync_pos,
+      currency_symbol: payload.currency_symbol,
       updated_at: new Date().toISOString()
     };
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('xion:settings-updated', { detail: fallback }));
+    }
+    return fallback;
   },
 
   // Auth & Session

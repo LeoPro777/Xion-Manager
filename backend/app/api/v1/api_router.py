@@ -29,7 +29,7 @@ from app.services.xion_pay_service import XionPayService
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.models.entities import User as UserModel, Business as BusinessModel
+from app.models.entities import User as UserModel, Business as BusinessModel, SystemSettings as SystemSettingsModel
 from app.core.security import create_access_token, verify_google_id_token, get_password_hash, verify_password
 
 api_router = APIRouter()
@@ -104,18 +104,118 @@ xion_pay_plans_db: List[dict] = [
 ]
 
 @api_router.get("/settings/exchange-rate", response_model=SystemSettingsResponse)
-async def get_exchange_rate():
-    return global_settings
+async def get_exchange_rate(db: AsyncSession = Depends(get_db)):
+    """
+    Retorna la configuración cambiaria y fiscal del negocio desde Supabase.
+    Si no existe registro previo, inicializa uno con los valores corporativos.
+    """
+    try:
+        res = await db.execute(select(SystemSettingsModel).limit(1))
+        setting = res.scalar_one_or_none()
+        if not setting:
+            biz_res = await db.execute(select(BusinessModel).limit(1))
+            biz = biz_res.scalar_one_or_none()
+            biz_id = biz.id if biz else "biz-101"
+
+            setting = SystemSettingsModel(
+                business_id=biz_id,
+                current_exchange_rate_bs=global_settings["current_exchange_rate_bs"],
+                tax_rate=global_settings["tax_rate"],
+                enable_taxes=global_settings["enable_taxes"],
+                auto_sync_pos=global_settings["auto_sync_pos"],
+                currency_symbol=global_settings["currency_symbol"],
+                updated_at=datetime.utcnow()
+            )
+            db.add(setting)
+            await db.commit()
+            await db.refresh(setting)
+
+        # Sincronizar estado en memoria
+        global_settings["id"] = str(setting.id)
+        global_settings["business_id"] = str(setting.business_id)
+        global_settings["current_exchange_rate_bs"] = float(setting.current_exchange_rate_bs)
+        global_settings["tax_rate"] = float(setting.tax_rate)
+        global_settings["enable_taxes"] = bool(setting.enable_taxes)
+        global_settings["auto_sync_pos"] = bool(setting.auto_sync_pos)
+        global_settings["currency_symbol"] = str(setting.currency_symbol)
+        global_settings["updated_at"] = setting.updated_at or datetime.utcnow()
+
+        return {
+            "id": str(setting.id),
+            "business_id": str(setting.business_id),
+            "current_exchange_rate_bs": float(setting.current_exchange_rate_bs),
+            "tax_rate": float(setting.tax_rate),
+            "enable_taxes": bool(setting.enable_taxes),
+            "auto_sync_pos": bool(setting.auto_sync_pos),
+            "currency_symbol": str(setting.currency_symbol),
+            "updated_at": setting.updated_at or datetime.utcnow()
+        }
+    except Exception as e:
+        return global_settings
 
 @api_router.put("/settings/exchange-rate", response_model=SystemSettingsResponse)
-async def update_exchange_rate(payload: SystemSettingsUpdate):
-    global_settings["current_exchange_rate_bs"] = payload.current_exchange_rate_bs
-    global_settings["tax_rate"] = payload.tax_rate
-    global_settings["enable_taxes"] = payload.enable_taxes
-    global_settings["auto_sync_pos"] = payload.auto_sync_pos
-    global_settings["currency_symbol"] = payload.currency_symbol
-    global_settings["updated_at"] = datetime.utcnow()
-    return global_settings
+async def update_exchange_rate(payload: SystemSettingsUpdate, db: AsyncSession = Depends(get_db)):
+    """
+    Actualiza la tasa oficial y configuración fiscal en Supabase con persistencia inmediata.
+    """
+    try:
+        res = await db.execute(select(SystemSettingsModel).limit(1))
+        setting = res.scalar_one_or_none()
+        if not setting:
+            biz_res = await db.execute(select(BusinessModel).limit(1))
+            biz = biz_res.scalar_one_or_none()
+            biz_id = biz.id if biz else "biz-101"
+
+            setting = SystemSettingsModel(
+                business_id=biz_id,
+                current_exchange_rate_bs=payload.current_exchange_rate_bs,
+                tax_rate=payload.tax_rate,
+                enable_taxes=payload.enable_taxes,
+                auto_sync_pos=payload.auto_sync_pos,
+                currency_symbol=payload.currency_symbol,
+                updated_at=datetime.utcnow()
+            )
+            db.add(setting)
+        else:
+            setting.current_exchange_rate_bs = payload.current_exchange_rate_bs
+            setting.tax_rate = payload.tax_rate
+            setting.enable_taxes = payload.enable_taxes
+            setting.auto_sync_pos = payload.auto_sync_pos
+            setting.currency_symbol = payload.currency_symbol
+            setting.updated_at = datetime.utcnow()
+
+        await db.commit()
+        await db.refresh(setting)
+
+        # Sincronizar estado en memoria
+        global_settings["id"] = str(setting.id)
+        global_settings["business_id"] = str(setting.business_id)
+        global_settings["current_exchange_rate_bs"] = float(setting.current_exchange_rate_bs)
+        global_settings["tax_rate"] = float(setting.tax_rate)
+        global_settings["enable_taxes"] = bool(setting.enable_taxes)
+        global_settings["auto_sync_pos"] = bool(setting.auto_sync_pos)
+        global_settings["currency_symbol"] = str(setting.currency_symbol)
+        global_settings["updated_at"] = setting.updated_at or datetime.utcnow()
+
+        return {
+            "id": str(setting.id),
+            "business_id": str(setting.business_id),
+            "current_exchange_rate_bs": float(setting.current_exchange_rate_bs),
+            "tax_rate": float(setting.tax_rate),
+            "enable_taxes": bool(setting.enable_taxes),
+            "auto_sync_pos": bool(setting.auto_sync_pos),
+            "currency_symbol": str(setting.currency_symbol),
+            "updated_at": setting.updated_at or datetime.utcnow()
+        }
+    except Exception as e:
+        # Fallback de seguridad en memoria si hay interrupción transitoria de red
+        global_settings["current_exchange_rate_bs"] = payload.current_exchange_rate_bs
+        global_settings["tax_rate"] = payload.tax_rate
+        global_settings["enable_taxes"] = payload.enable_taxes
+        global_settings["auto_sync_pos"] = payload.auto_sync_pos
+        global_settings["currency_symbol"] = payload.currency_symbol
+        global_settings["updated_at"] = datetime.utcnow()
+        return global_settings
 
 # --- Xion-Pay Dedicated Endpoints ---
 @api_router.get("/xion-pay/config", response_model=XionPayConfigResponse)
@@ -965,6 +1065,7 @@ async def update_combo_components(combo_id: str, components: List[dict]):
             return {"status": "SUCCESS", "combo_items": components}
     raise HTTPException(status_code=404, detail="Combo no encontrado")
 
+@api_router.get("/inventory")
 @api_router.get("/inventory/products")
 async def list_products(branch_id: Optional[str] = None):
     if branch_id:

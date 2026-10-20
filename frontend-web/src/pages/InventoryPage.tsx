@@ -106,6 +106,15 @@ export const InventoryPage: React.FC = () => {
     if (savedView === 'list' || savedView === 'cards') {
       setViewMode(savedView);
     }
+
+    const handleSettingsUpdated = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail?.current_exchange_rate_bs) {
+        setExchangeRate(Number(customEvent.detail.current_exchange_rate_bs));
+      }
+    };
+    window.addEventListener('xion:settings-updated', handleSettingsUpdated);
+    return () => window.removeEventListener('xion:settings-updated', handleSettingsUpdated);
   }, []);
 
   const loadData = async () => {
