@@ -25,3 +25,5 @@ services:
         sync: false
       - key: STORAGE_BACKEND
         value: "local"
+      - key: GOOGLE_CLIENT_ID
+        value: "926646602874-dakf4njbrmgg2fp4qokfflq7tlhid68j.apps.googleusercontent.com"

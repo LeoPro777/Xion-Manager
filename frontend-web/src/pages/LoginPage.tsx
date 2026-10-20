@@ -7,14 +7,29 @@ interface LoginPageProps {
   onLoginSuccess: (user: User) => void;
 }
 
+const DEFAULT_GOOGLE_CLIENT_ID = '926646602874-dakf4njbrmgg2fp4qokfflq7tlhid68j.apps.googleusercontent.com';
+
 export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [email, setEmail] = useState('admin@xion.com');
   const [password, setPassword] = useState('••••••••');
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [googleClientId, setGoogleClientId] = useState<string>(
+    (import.meta.env as any).VITE_GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID
+  );
 
   React.useEffect(() => {
-    // Carga asíncrona segura de Google Identity Services
+    // 1. Obtener Google Client ID configurado dinámicamente en el backend
+    fetch('/api/v1/auth/config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.google_client_id) {
+          setGoogleClientId(data.google_client_id);
+        }
+      })
+      .catch(() => {});
+
+    // 2. Carga asíncrona segura de Google Identity Services
     if (!document.getElementById('google-gsi-client')) {
       const script = document.createElement('script');
       script.id = 'google-gsi-client';
@@ -27,31 +42,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
   const handleGoogleLogin = async () => {
     setErrorMessage(null);
-    const googleClientId = (import.meta.env as any).VITE_GOOGLE_CLIENT_ID;
-
-    // Si no hay Client ID de GCP configurado aún o en modo demo/dev
-    if (!googleClientId) {
-      if (import.meta.env.DEV) {
-        setLoading(true);
-        try {
-          const user = await api.loginWithGoogle('mock-google-token:OWNER');
-          onLoginSuccess(user);
-        } catch (err: any) {
-          setErrorMessage(err.message || 'Error al autenticar con Google OAuth');
-        } finally {
-          setLoading(false);
-        }
-        return;
-      }
-      setErrorMessage('Configura VITE_GOOGLE_CLIENT_ID en .env para activar el inicio de sesión real con Google.');
-      return;
-    }
+    const activeClientId = googleClientId || (import.meta.env as any).VITE_GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID;
 
     // Google Identity Services (GSI)
     const google = (window as any).google;
     if (google?.accounts?.id) {
       google.accounts.id.initialize({
-        client_id: googleClientId,
+        client_id: activeClientId,
         callback: async (response: { credential: string }) => {
           if (!response?.credential) return;
           setLoading(true);
@@ -65,8 +62,25 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
           }
         }
       });
-      google.accounts.id.prompt();
+      google.accounts.id.prompt((notification: any) => {
+        if (notification?.isNotDisplayed?.()) {
+          console.warn('Google One Tap no desplegado:', notification?.getNotDisplayedReason?.());
+        }
+      });
     } else {
+      // Modo desarrollo fallback si el SDK de Google está bloqueado
+      if (import.meta.env.DEV) {
+        setLoading(true);
+        try {
+          const user = await api.loginWithGoogle('mock-google-token:OWNER');
+          onLoginSuccess(user);
+        } catch (err: any) {
+          setErrorMessage(err.message || 'Error al autenticar con Google OAuth');
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
       setErrorMessage('Cargando servicios de Google... Por favor reintenta en un momento.');
     }
   };

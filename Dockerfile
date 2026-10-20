@@ -7,6 +7,9 @@
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app/frontend
 
+ARG VITE_GOOGLE_CLIENT_ID="926646602874-dakf4njbrmgg2fp4qokfflq7tlhid68j.apps.googleusercontent.com"
+ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
+
 COPY frontend-web/package.json frontend-web/package-lock.json ./
 RUN npm install
 

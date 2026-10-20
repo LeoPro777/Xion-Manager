@@ -439,6 +439,17 @@ async def onboard_trial_lead(lead: XionPayLeadCreate):
 
 
 # 0. Authentication Endpoints (Google OAuth2 + JWT)
+@api_router.get("/auth/config")
+async def get_auth_config():
+    """
+    Retorna la configuración pública de autenticación (ej. Google Client ID)
+    para desacoplar el frontend del empaquetado estático en producción.
+    """
+    return {
+        "google_client_id": settings.GOOGLE_CLIENT_ID or "926646602874-dakf4njbrmgg2fp4qokfflq7tlhid68j.apps.googleusercontent.com"
+    }
+
+
 @api_router.post("/auth/google", response_model=AuthTokenResponse)
 async def login_google(payload: GoogleAuthRequest, db: AsyncSession = Depends(get_db)):
     """
