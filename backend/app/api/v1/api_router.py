@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, status, Body, HTTPException, Query, Request, Header
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, List
 import json
 from app.core.config import settings
@@ -17,7 +17,8 @@ from app.schemas.schemas import (
     XionPaySyncPayload, XionPaySyncResponse,
     XionPayLeadCreate, XionPayLeadResponse, XionPayWebhookResponse,
     StockAdjustmentDTO, CategoryCreate, CategoryResponse, SupplierPayableLedgerItem,
-    GoogleAuthRequest, StandardLoginRequest, AuthTokenResponse
+    GoogleAuthRequest, StandardLoginRequest, AuthTokenResponse,
+    RegisterUserRequest, OnboardingCompleteRequest
 )
 from app.services.image_service import (
     save_and_process_payment_method_image,
@@ -65,6 +66,18 @@ xion_pay_state = {
 }
 
 xion_pay_plans_db: List[dict] = [
+    {
+        "id": "plan-trial",
+        "code": "TRIAL",
+        "name": "Plan Gratuito (Prueba 30 Días)",
+        "description": "Acceso total sin costo durante 30 días para evaluar la plataforma multi-sucursal y sincronización POS",
+        "max_branches": 2,
+        "max_cash_registers": 3,
+        "price_monthly": 0.00,
+        "price_semiannual": 0.00,
+        "price_annual": 0.00,
+        "is_active": True
+    },
     {
         "id": "plan-basic",
         "code": "BASIC",
@@ -610,6 +623,217 @@ async def login_standard(payload: StandardLoginRequest, db: AsyncSession = Depen
             "created_at": user.created_at.isoformat() if user.created_at else None
         }
     }
+
+
+@api_router.post("/auth/register", response_model=AuthTokenResponse)
+async def register_user(payload: RegisterUserRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Registro de nuevos usuarios. Crea la cuenta inicial con rol OWNER y bandera de onboarding inicial.
+    """
+    email = payload.email.lower().strip()
+    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    existing = result.scalar_one_or_none()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ya existe una cuenta registrada con este correo electrónico."
+        )
+
+    # Negocio predeterminado
+    biz_result = await db.execute(select(BusinessModel).limit(1))
+    biz = biz_result.scalar_one_or_none()
+    if not biz:
+        biz = BusinessModel(
+            id="biz-101",
+            legal_name="Nueva Empresa",
+            trade_name="Mi Negocio",
+            tax_id="J-00000000-0",
+            phone=payload.phone or "+58 414-1112233",
+            email=email,
+            is_active=True
+        )
+        db.add(biz)
+        await db.commit()
+        await db.refresh(biz)
+
+    user = UserModel(
+        email=email,
+        hashed_password=get_password_hash(payload.password),
+        full_name=payload.full_name,
+        phone=payload.phone,
+        role="OWNER",
+        business_id=biz.id,
+        approval_status="APPROVED",
+        is_active=True
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    token_claims = {
+        "sub": user.id,
+        "email": user.email,
+        "role": user.role,
+        "business_id": user.business_id,
+        "full_name": user.full_name
+    }
+    jwt_token = create_access_token(token_claims)
+
+    return {
+        "access_token": jwt_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "phone": user.phone,
+            "role": user.role,
+            "business_id": user.business_id,
+            "approval_status": user.approval_status,
+            "is_active": user.is_active,
+            "onboarding_completed": False,
+            "created_at": user.created_at.isoformat() if user.created_at else None
+        }
+    }
+
+
+@api_router.post("/onboarding/complete")
+async def complete_onboarding(payload: OnboardingCompleteRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Guarda los datos del modal inicial de onboarding:
+    1. Datos personales y de la(s) compañía(s).
+    2. Parámetros del sistema y preferencias (moneda, tasa, IVA, auto-sync).
+    3. Activación del Plan (Plan Gratuito 30 días con Xion-Pay).
+    """
+    # 1. Actualizar datos de usuario si se especificó
+    if payload.user_id:
+        user_res = await db.execute(select(UserModel).where(UserModel.id == payload.user_id))
+        user = user_res.scalar_one_or_none()
+        if user:
+            if payload.full_name:
+                user.full_name = payload.full_name
+            if payload.phone:
+                user.phone = payload.phone
+            db.add(user)
+
+    # 2. Actualizar o crear Compañía Principal
+    biz_res = await db.execute(select(BusinessModel).limit(1))
+    biz = biz_res.scalar_one_or_none()
+    p_comp = payload.primary_company
+    if not biz:
+        biz = BusinessModel(
+            id="biz-101",
+            legal_name=p_comp.legal_name,
+            trade_name=p_comp.trade_name,
+            tax_id=p_comp.tax_id,
+            phone=p_comp.phone or "+58 414-1112233",
+            email=p_comp.email or "contacto@empresa.com",
+            is_active=True
+        )
+        db.add(biz)
+    else:
+        biz.legal_name = p_comp.legal_name
+        biz.trade_name = p_comp.trade_name
+        biz.tax_id = p_comp.tax_id
+        if p_comp.phone:
+            biz.phone = p_comp.phone
+        if p_comp.email:
+            biz.email = p_comp.email
+        db.add(biz)
+
+    await db.commit()
+    await db.refresh(biz)
+
+    # 3. Guardar configuraciones del sistema (moneda, tasa, IVA, sync)
+    sys_res = await db.execute(select(SystemSettingsModel).limit(1))
+    sys_setting = sys_res.scalar_one_or_none()
+    if not sys_setting:
+        sys_setting = SystemSettingsModel(
+            business_id=biz.id,
+            current_exchange_rate_bs=payload.current_exchange_rate_bs or 36.50,
+            tax_rate=payload.tax_rate or 16.00,
+            enable_taxes=payload.enable_taxes if payload.enable_taxes is not None else True,
+            auto_sync_pos=payload.auto_sync_pos if payload.auto_sync_pos is not None else True,
+            currency_symbol=payload.currency_symbol or "Bs.",
+            updated_at=datetime.utcnow()
+        )
+        db.add(sys_setting)
+    else:
+        if payload.current_exchange_rate_bs is not None:
+            sys_setting.current_exchange_rate_bs = payload.current_exchange_rate_bs
+        if payload.tax_rate is not None:
+            sys_setting.tax_rate = payload.tax_rate
+        if payload.enable_taxes is not None:
+            sys_setting.enable_taxes = payload.enable_taxes
+        if payload.auto_sync_pos is not None:
+            sys_setting.auto_sync_pos = payload.auto_sync_pos
+        if payload.currency_symbol:
+            sys_setting.currency_symbol = payload.currency_symbol
+        sys_setting.updated_at = datetime.utcnow()
+        db.add(sys_setting)
+
+    await db.commit()
+
+    # Actualizar estado global en memoria
+    global_settings["current_exchange_rate_bs"] = float(sys_setting.current_exchange_rate_bs)
+    global_settings["tax_rate"] = float(sys_setting.tax_rate)
+    global_settings["enable_taxes"] = bool(sys_setting.enable_taxes)
+    global_settings["auto_sync_pos"] = bool(sys_setting.auto_sync_pos)
+    global_settings["currency_symbol"] = str(sys_setting.currency_symbol)
+
+    # 4. Activar Plan (Plan Gratuito 30 Días de primero)
+    is_trial = (payload.plan_code or "TRIAL").upper() == "TRIAL"
+    trial_days = 30
+    trial_ends = datetime.utcnow() + timedelta(days=trial_days)
+
+    xion_pay_state["license_status"] = "trial" if is_trial else "active"
+    xion_pay_state["trial_ends_at"] = trial_ends.isoformat()
+    xion_pay_state["tolerance_expires_at"] = None
+
+    if is_trial:
+        try:
+            lead_data = {
+                "nombre_contacto": payload.full_name or "Usuario Principal",
+                "nombre_comercial": p_comp.trade_name,
+                "email": p_comp.email or "contacto@empresa.com",
+                "telefono_contacto": p_comp.phone or payload.phone or "+58 414-1112233",
+                "documento_identidad_tipo": "J" if "J" in p_comp.tax_id.upper() else "V",
+                "documento_identidad_numero": p_comp.tax_id,
+                "source": "xion-manager-onboarding"
+            }
+            trial_response = await XionPayService.onboard_trial(lead_data)
+            if trial_response.get("status") != "error":
+                xion_pay_state["tenant_id"] = trial_response.get("client_id")
+                xion_pay_state["license_token"] = trial_response.get("license_token")
+        except Exception:
+            pass
+
+    return {
+        "status": "success",
+        "message": "Configuración inicial y onboarding completados exitosamente.",
+        "business": {
+            "id": biz.id,
+            "legal_name": biz.legal_name,
+            "trade_name": biz.trade_name,
+            "tax_id": biz.tax_id
+        },
+        "plan": {
+            "code": payload.plan_code or "TRIAL",
+            "name": "Plan Gratuito (Prueba 30 Días)" if is_trial else f"Plan {payload.plan_code}",
+            "is_trial": is_trial,
+            "trial_days": trial_days,
+            "trial_ends_at": trial_ends.isoformat()
+        },
+        "settings": {
+            "currency_symbol": sys_setting.currency_symbol,
+            "current_exchange_rate_bs": float(sys_setting.current_exchange_rate_bs),
+            "tax_rate": float(sys_setting.tax_rate),
+            "enable_taxes": bool(sys_setting.enable_taxes),
+            "auto_sync_pos": bool(sys_setting.auto_sync_pos)
+        },
+        "onboarding_completed": True
+    }
+
 
 @api_router.post("/auth/login-bypass")
 async def login_bypass(role: str = Body(default="OWNER", embed=True)):

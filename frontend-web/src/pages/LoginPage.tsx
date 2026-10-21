@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, Zap, Lock, Mail, ArrowRight, UserCheck } from 'lucide-react';
+import { Shield, Zap, Lock, Mail, ArrowRight, UserCheck, UserPlus, Phone } from 'lucide-react';
 import { Role, User } from '../types';
 import { api } from '../services/api';
 
@@ -10,8 +10,12 @@ interface LoginPageProps {
 const DEFAULT_GOOGLE_CLIENT_ID = '926646602874-dakf4njbrmgg2fp4qokfflq7tlhid68j.apps.googleusercontent.com';
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [email, setEmail] = useState('admin@xion.com');
   const [password, setPassword] = useState('••••••••');
+  const [registerFullName, setRegisterFullName] = useState('');
+  const [registerPhone, setRegisterPhone] = useState('');
+  const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [googleClientId, setGoogleClientId] = useState<string>(
@@ -85,9 +89,45 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  const handleStandardLogin = async (e: React.FormEvent) => {
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+
+    if (isRegisterMode) {
+      if (!registerFullName.trim()) {
+        setErrorMessage('Por favor ingresa tu nombre completo.');
+        return;
+      }
+      if (!email.trim() || !email.includes('@')) {
+        setErrorMessage('Por favor ingresa un correo electrónico válido.');
+        return;
+      }
+      if (password.length < 6) {
+        setErrorMessage('La contraseña debe tener al menos 6 caracteres.');
+        return;
+      }
+      if (password !== registerConfirmPassword) {
+        setErrorMessage('Las contraseñas no coinciden.');
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const newUser = await api.registerUser({
+          full_name: registerFullName,
+          email: email.trim().toLowerCase(),
+          password: password,
+          phone: registerPhone
+        });
+        onLoginSuccess(newUser);
+      } catch (err: any) {
+        setErrorMessage(err.message || 'Error al crear la cuenta');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     setLoading(true);
     try {
       const user = await api.loginWithCredentials(email, password);
@@ -198,47 +238,121 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             </button>
           </div>
 
+          {/* Mode Selector Tab (Iniciar Sesión vs Registrarse) */}
+          <div className="grid grid-cols-2 p-1 rounded-xl bg-slate-900 border border-slate-800 text-xs">
+            <button
+              type="button"
+              onClick={() => { setIsRegisterMode(false); setErrorMessage(null); }}
+              className={`py-1.5 rounded-lg font-bold transition-all ${
+                !isRegisterMode ? 'bg-cyan-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Iniciar Sesión
+            </button>
+            <button
+              type="button"
+              onClick={() => { setIsRegisterMode(true); setErrorMessage(null); }}
+              className={`py-1.5 rounded-lg font-bold transition-all ${
+                isRegisterMode ? 'bg-cyan-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Crear Cuenta (Registrarse)
+            </button>
+          </div>
+
           <div className="relative flex items-center justify-center">
             <div className="border-t border-slate-800 w-full"></div>
             <span className="bg-slate-950 px-3 text-[10px] uppercase font-semibold text-slate-500 absolute">
-              o ingresa con tu correo
+              {isRegisterMode ? 'completa tus datos' : 'o ingresa con tu correo'}
             </span>
           </div>
 
-          {/* Standard Credentials Form */}
-          <form onSubmit={handleStandardLogin} className="space-y-3 text-xs pt-1">
+          {/* Credentials Form */}
+          <form onSubmit={handleAuthSubmit} className="space-y-3 text-xs pt-1">
+            {isRegisterMode && (
+              <>
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Nombre Completo *</label>
+                  <div className="relative">
+                    <UserPlus className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Ej. Carlos Mendoza"
+                      value={registerFullName}
+                      onChange={(e) => setRegisterFullName(e.target.value)}
+                      required
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Teléfono / WhatsApp</label>
+                  <div className="relative">
+                    <Phone className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="+58 414-1234567"
+                      value={registerPhone}
+                      onChange={(e) => setRegisterPhone(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+
             <div>
-              <label className="block text-slate-400 mb-1 font-semibold">Correo Electrónico</label>
+              <label className="block text-slate-400 mb-1 font-semibold">Correo Electrónico *</label>
               <div className="relative">
                 <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  required
                   className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-slate-400 mb-1 font-semibold">Contraseña</label>
+              <label className="block text-slate-400 mb-1 font-semibold">Contraseña *</label>
               <div className="relative">
                 <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  required
                   className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500"
                 />
               </div>
             </div>
+
+            {isRegisterMode && (
+              <div>
+                <label className="block text-slate-400 mb-1 font-semibold">Confirmar Contraseña *</label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="password"
+                    placeholder="Repite la contraseña"
+                    value={registerConfirmPassword}
+                    onChange={(e) => setRegisterConfirmPassword(e.target.value)}
+                    required
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+              </div>
+            )}
 
             <button
               type="submit"
               disabled={loading}
               className="w-full py-2.5 mt-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/20 transition-all flex items-center justify-center gap-2"
             >
-              <span>{loading ? 'Accediendo...' : 'Iniciar Sesión'}</span>
+              <span>{loading ? 'Procesando...' : isRegisterMode ? 'Crear Cuenta y Comenzar Onboarding' : 'Iniciar Sesión'}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>

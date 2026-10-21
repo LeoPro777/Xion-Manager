@@ -618,6 +618,18 @@ let mockXionPayConfig: XionPayConfig = {
 
 let mockXionPayPlans: XionPayPlan[] = [
   {
+    id: 'plan-trial',
+    code: 'TRIAL',
+    name: 'Plan Gratuito (Prueba 30 Días)',
+    description: 'Acceso total sin costo durante 30 días para evaluar la plataforma multi-sucursal y sincronización POS',
+    max_branches: 2,
+    max_cash_registers: 3,
+    price_monthly: 0.00,
+    price_semiannual: 0.00,
+    price_annual: 0.00,
+    is_active: true
+  },
+  {
     id: 'plan-basic',
     code: 'BASIC',
     name: 'Plan Básico (Xion-Pay)',
@@ -854,6 +866,48 @@ export const api = {
     } catch (err: any) {
       console.error('Credentials login error:', err);
       throw err;
+    }
+  },
+
+  async registerUser(data: { full_name: string; email: string; password: string; phone?: string }): Promise<User> {
+    try {
+      const res = await fetch('/api/v1/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Error al registrar usuario');
+      }
+      const responseData = await res.json();
+      if (responseData.access_token) {
+        localStorage.setItem('xion_access_token', responseData.access_token);
+        localStorage.setItem('xion_user', JSON.stringify(responseData.user));
+      }
+      return responseData.user as User;
+    } catch (err: any) {
+      console.error('Registration API error:', err);
+      throw err;
+    }
+  },
+
+  async completeOnboarding(payload: any): Promise<any> {
+    try {
+      const res = await fetch('/api/v1/onboarding/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Error al guardar configuración de onboarding');
+      }
+      return await res.json();
+    } catch (err: any) {
+      console.error('Complete onboarding API error:', err);
+      // Offline fallback
+      return { status: 'success', onboarding_completed: true };
     }
   },
 

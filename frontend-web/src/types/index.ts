@@ -27,6 +27,7 @@ export interface User {
   role: Role;
   approval_status: ApprovalStatus;
   is_active: boolean;
+  onboarding_completed?: boolean;
   created_at: string;
 }
 

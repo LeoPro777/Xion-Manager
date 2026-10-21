@@ -444,10 +444,40 @@ class StandardLoginRequest(BaseModel):
     email: str = Field(..., description="Correo corporativo o de usuario")
     password: str = Field(..., min_length=4, description="Contraseña del usuario")
 
+class RegisterUserRequest(BaseModel):
+    full_name: str = Field(..., min_length=2, description="Nombre completo del usuario")
+    email: str = Field(..., description="Correo electrónico del usuario")
+    password: str = Field(..., min_length=6, description="Contraseña del usuario")
+    phone: Optional[str] = None
+
+class CompanyInfoSchema(BaseModel):
+    legal_name: str
+    trade_name: str
+    tax_id: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+
+class OnboardingCompleteRequest(BaseModel):
+    user_id: Optional[str] = None
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    primary_company: CompanyInfoSchema
+    additional_companies: Optional[List[CompanyInfoSchema]] = []
+    currency_symbol: Optional[str] = "Bs."
+    current_exchange_rate_bs: Optional[float] = 36.50
+    tax_rate: Optional[float] = 16.00
+    enable_taxes: Optional[bool] = True
+    auto_sync_pos: Optional[bool] = True
+    preferences: Optional[Dict[str, Any]] = None
+    plan_code: Optional[str] = "TRIAL"
+    billing_cycle: Optional[str] = "MONTHLY"
+
 class AuthTokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: Dict[str, Any]
+
 
 
 
