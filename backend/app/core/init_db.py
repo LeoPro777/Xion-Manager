@@ -2,7 +2,10 @@ import asyncio
 from datetime import datetime, timedelta
 from sqlalchemy import select
 from app.core.database import AsyncSessionLocal, engine, Base
-from app.models.entities import SubscriptionPlan, Business, BusinessSubscription, Branch, User, Product, BranchInventory
+from app.models.entities import (
+    SubscriptionPlan, Business, BusinessSubscription, Branch, User,
+    Product, BranchInventory, UserSession, UserPreference
+)
 
 async def seed_initial_data():
     """

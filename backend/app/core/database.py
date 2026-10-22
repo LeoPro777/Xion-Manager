@@ -42,8 +42,11 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False
 )
 
+from sqlalchemy import MetaData
+
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(schema="public" if "sqlite" not in settings.ASYNC_DATABASE_URL else None)
+
 
 async def get_db():
     async with AsyncSessionLocal() as session:

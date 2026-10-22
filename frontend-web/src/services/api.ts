@@ -5,6 +5,8 @@ import {
   DashboardMetrics, 
   ProductInventory, 
   User, 
+  UserPreference,
+  UserSession,
   AuditLogItem, 
   CashSessionSyncItem, 
   NotificationItem, 
@@ -839,6 +841,9 @@ export const api = {
         localStorage.setItem('xion_access_token', data.access_token);
         localStorage.setItem('xion_user', JSON.stringify(data.user));
       }
+      if (data.preferences) {
+        localStorage.setItem('xion_user_preferences', JSON.stringify(data.preferences));
+      }
       return data.user as User;
     } catch (err: any) {
       console.error('Google OAuth API error:', err);
@@ -862,6 +867,9 @@ export const api = {
         localStorage.setItem('xion_access_token', data.access_token);
         localStorage.setItem('xion_user', JSON.stringify(data.user));
       }
+      if (data.preferences) {
+        localStorage.setItem('xion_user_preferences', JSON.stringify(data.preferences));
+      }
       return data.user as User;
     } catch (err: any) {
       console.error('Credentials login error:', err);
@@ -884,6 +892,9 @@ export const api = {
       if (responseData.access_token) {
         localStorage.setItem('xion_access_token', responseData.access_token);
         localStorage.setItem('xion_user', JSON.stringify(responseData.user));
+      }
+      if (responseData.preferences) {
+        localStorage.setItem('xion_user_preferences', JSON.stringify(responseData.preferences));
       }
       return responseData.user as User;
     } catch (err: any) {
@@ -924,6 +935,9 @@ export const api = {
           localStorage.setItem('xion_access_token', data.access_token);
           localStorage.setItem('xion_user', JSON.stringify(data));
         }
+        if (data.preferences) {
+          localStorage.setItem('xion_user_preferences', JSON.stringify(data.preferences));
+        }
       }
     } catch (e) {
       // Fallback silently if offline dev
@@ -950,6 +964,87 @@ export const api = {
       is_active: true,
       created_at: '2026-01-10T08:00:00Z'
     };
+  },
+
+  // Perfil, Preferencias del Usuario y Gestión de Sesiones JWT
+  async getUserProfile(): Promise<{ user: User; preferences: UserPreference; session?: UserSession }> {
+    const token = localStorage.getItem('xion_access_token');
+    const res = await fetch('/api/v1/users/me', {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      }
+    });
+    if (!res.ok) throw new Error('Error al obtener perfil y preferencias');
+    return await res.json();
+  },
+
+  async getUserPreferences(): Promise<UserPreference> {
+    const token = localStorage.getItem('xion_access_token');
+    const res = await fetch('/api/v1/users/me/preferences', {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      }
+    });
+    if (!res.ok) throw new Error('Error al obtener preferencias');
+    const data = await res.json();
+    localStorage.setItem('xion_user_preferences', JSON.stringify(data));
+    return data;
+  },
+
+  async updateUserPreferences(preferences: Partial<UserPreference>): Promise<UserPreference> {
+    const token = localStorage.getItem('xion_access_token');
+    const res = await fetch('/api/v1/users/me/preferences', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(preferences)
+    });
+    if (!res.ok) throw new Error('Error al actualizar preferencias');
+    const data = await res.json();
+    localStorage.setItem('xion_user_preferences', JSON.stringify(data));
+    return data;
+  },
+
+  async getUserSessions(): Promise<UserSession[]> {
+    const token = localStorage.getItem('xion_access_token');
+    const res = await fetch('/api/v1/auth/sessions', {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      }
+    });
+    if (!res.ok) throw new Error('Error al obtener sesiones');
+    return await res.json();
+  },
+
+  async revokeSession(sessionId: string): Promise<void> {
+    const token = localStorage.getItem('xion_access_token');
+    const res = await fetch(`/api/v1/auth/sessions/${sessionId}`, {
+      method: 'DELETE',
+      headers: {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      }
+    });
+    if (!res.ok) throw new Error('Error al revocar sesión');
+  },
+
+  async logout(): Promise<void> {
+    const token = localStorage.getItem('xion_access_token');
+    try {
+      if (token) {
+        await fetch('/api/v1/auth/logout', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+      }
+    } catch (_) {}
+    localStorage.removeItem('xion_access_token');
+    localStorage.removeItem('xion_user');
+    localStorage.removeItem('xion_user_preferences');
   },
 
   // 1. Dashboard

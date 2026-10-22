@@ -22,10 +22,10 @@ class Business(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class SystemSettings(Base):
-    __tablename__ = "system_settings"
+    __tablename__ = "business_settings"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
     current_exchange_rate_bs: Mapped[float] = mapped_column(Numeric(12, 4), default=36.50)
     tax_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=16.00)
     enable_taxes: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -64,11 +64,11 @@ class BusinessSubscription(Base):
     __tablename__ = "business_subscriptions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
-    plan_id: Mapped[str] = mapped_column(ForeignKey("subscription_plans.id"), nullable=False)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("subscription_plans.id"), nullable=False, index=True)
     billing_cycle: Mapped[str] = mapped_column(String(20), nullable=False)
     extra_cash_registers: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE", index=True)
     starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     grace_period_until: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -80,9 +80,9 @@ class PaymentReport(Base):
     __tablename__ = "payment_reports"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
     order_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    subscription_id: Mapped[Optional[str]] = mapped_column(ForeignKey("business_subscriptions.id"), nullable=True)
+    subscription_id: Mapped[Optional[str]] = mapped_column(ForeignKey("business_subscriptions.id"), nullable=True, index=True)
     concept: Mapped[Optional[str]] = mapped_column(String(150), default="Pago de Factura")
     payment_method: Mapped[str] = mapped_column(String(50), nullable=False)
     origin_bank: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
@@ -109,7 +109,7 @@ class Branch(Base):
     __tablename__ = "branches"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     address: Mapped[str] = mapped_column(Text, nullable=False)
     latitude: Mapped[Optional[float]] = mapped_column(Float)
@@ -124,8 +124,8 @@ class CashRegister(Base):
     __tablename__ = "cash_registers"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False)
-    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     hardware_uuid: Mapped[Optional[str]] = mapped_column(String(150))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -136,23 +136,69 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
-    branch_id: Mapped[Optional[str]] = mapped_column(ForeignKey("branches.id", ondelete="SET NULL"))
-    email: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    branch_id: Mapped[Optional[str]] = mapped_column(ForeignKey("branches.id", ondelete="SET NULL"), index=True)
+    email: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str] = mapped_column(String(150), nullable=False)
     phone: Mapped[Optional[str]] = mapped_column(String(30))
     role: Mapped[str] = mapped_column(String(30), default="CASHIER")
     approval_status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    avatar_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    sessions: Mapped[List["UserSession"]] = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+    preferences: Mapped[Optional["UserPreference"]] = relationship("UserPreference", back_populates="user", uselist=False, cascade="all, delete-orphan")
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_jti: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    refresh_token_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    terminal_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    device_info: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User", back_populates="sessions")
+    business: Mapped["Business"] = relationship("Business")
+
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    theme: Mapped[str] = mapped_column(String(20), default="dark")
+    language: Mapped[str] = mapped_column(String(10), default="es")
+    default_currency: Mapped[str] = mapped_column(String(10), default="USD")
+    sound_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    table_rows_per_page: Mapped[int] = mapped_column(Integer, default=25)
+    compact_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+    notifications: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    pos_quick_keys: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    ui_preferences: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User", back_populates="preferences")
+    business: Mapped["Business"] = relationship("Business")
+
 
 class Category(Base):
     __tablename__ = "categories"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     parent_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -163,8 +209,8 @@ class Product(Base):
     __tablename__ = "products"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
-    category_id: Mapped[Optional[str]] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"), nullable=True)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    category_id: Mapped[Optional[str]] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"), nullable=True, index=True)
     category: Mapped[Optional[str]] = mapped_column(String(100), default="General")
     barcode: Mapped[Optional[str]] = mapped_column(String(80), index=True)
     sku: Mapped[str] = mapped_column(String(80), index=True)
@@ -187,16 +233,16 @@ class ProductComposition(Base):
     __tablename__ = "product_compositions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    parent_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
-    child_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    parent_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    child_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
     quantity_required: Mapped[float] = mapped_column(Numeric(12, 4), default=1.0)
 
 class BranchInventory(Base):
     __tablename__ = "branch_inventory"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False)
-    product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
     current_stock: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -205,7 +251,7 @@ class Supplier(Base):
     __tablename__ = "suppliers"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(150), nullable=False)
     identification_type: Mapped[str] = mapped_column(String(20), default="RIF")
     rif: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -223,9 +269,9 @@ class Purchase(Base):
     __tablename__ = "purchases"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
-    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False)
-    supplier_id: Mapped[Optional[str]] = mapped_column(ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_id: Mapped[Optional[str]] = mapped_column(ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True)
     supplier_name: Mapped[str] = mapped_column(String(150), nullable=False)
     supplier_rif: Mapped[str] = mapped_column(String(50), default="J-00000000-0")
     invoice_number: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -245,8 +291,8 @@ class PurchaseItem(Base):
     __tablename__ = "purchase_items"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    purchase_id: Mapped[str] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"), nullable=False)
-    product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    purchase_id: Mapped[str] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
     quantity: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
     lot_number: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     cost_usd: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
@@ -270,19 +316,25 @@ class InventoryTransaction(Base):
     __tablename__ = "inventory_transactions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    branch_id: Mapped[Optional[str]] = mapped_column(ForeignKey("branches.id", ondelete="SET NULL"), nullable=True, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
     tx_type: Mapped[str] = mapped_column(String(10), nullable=False)
     reason: Mapped[str] = mapped_column(String(50), nullable=False)
     quantity: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
     reference_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    terminal_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 class InventoryShrinkage(Base):
     __tablename__ = "inventory_shrinkage"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
-    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
     quantity: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
     reason: Mapped[str] = mapped_column(String(100), nullable=False)
     justification: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -292,8 +344,8 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
-    user_id: Mapped[Optional[str]] = mapped_column(String(36))
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)
     branch_id: Mapped[Optional[str]] = mapped_column(String(36))
     cash_register_id: Mapped[Optional[str]] = mapped_column(String(36))
     action_type: Mapped[str] = mapped_column(String(60), nullable=False)
@@ -301,12 +353,13 @@ class AuditLog(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     details: Mapped[Optional[dict]] = mapped_column(JSON)
     ip_address: Mapped[Optional[str]] = mapped_column(String(45))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 class PaymentMethod(Base):
     __tablename__ = "payment_methods"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, index=True)
+    business_id: Mapped[Optional[str]] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     code: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     currency: Mapped[str] = mapped_column(String(10), default="VES", nullable=False)

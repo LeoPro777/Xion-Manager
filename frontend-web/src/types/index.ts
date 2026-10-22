@@ -27,8 +27,42 @@ export interface User {
   role: Role;
   approval_status: ApprovalStatus;
   is_active: boolean;
+  avatar_url?: string;
+  last_login_at?: string;
   onboarding_completed?: boolean;
   created_at: string;
+}
+
+export interface UserPreference {
+  id?: string;
+  user_id?: string;
+  business_id?: string;
+  theme?: 'dark' | 'light' | 'system';
+  language?: string;
+  default_currency?: string;
+  sound_enabled?: boolean;
+  table_rows_per_page?: number;
+  compact_mode?: boolean;
+  notifications?: Record<string, any>;
+  pos_quick_keys?: Record<string, any>;
+  ui_preferences?: Record<string, any>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface UserSession {
+  id: string;
+  user_id: string;
+  business_id: string;
+  token_jti: string;
+  terminal_id?: string;
+  device_info?: string;
+  ip_address?: string;
+  is_active: boolean;
+  expires_at: string;
+  last_activity_at?: string;
+  created_at: string;
+  is_current?: boolean;
 }
 
 export interface Branch {

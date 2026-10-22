@@ -18,7 +18,8 @@ from app.schemas.schemas import (
     XionPayLeadCreate, XionPayLeadResponse, XionPayWebhookResponse,
     StockAdjustmentDTO, CategoryCreate, CategoryResponse, SupplierPayableLedgerItem,
     GoogleAuthRequest, StandardLoginRequest, AuthTokenResponse,
-    RegisterUserRequest, OnboardingCompleteRequest
+    RegisterUserRequest, OnboardingCompleteRequest,
+    UserPreferenceUpdate, UserPreferenceResponse, UserSessionResponse, UserMeResponse
 )
 from app.services.image_service import (
     save_and_process_payment_method_image,
@@ -30,8 +31,14 @@ from app.services.xion_pay_service import XionPayService
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.models.entities import User as UserModel, Business as BusinessModel, SystemSettings as SystemSettingsModel
-from app.core.security import create_access_token, verify_google_id_token, get_password_hash, verify_password
+from app.models.entities import (
+    User as UserModel,
+    Business as BusinessModel,
+    SystemSettings as SystemSettingsModel,
+    UserSession as UserSessionModel,
+    UserPreference as UserPreferenceModel
+)
+from app.core.security import create_access_token, decode_access_token, verify_google_id_token, get_password_hash, verify_password
 
 api_router = APIRouter()
 
@@ -463,11 +470,133 @@ async def get_auth_config():
     }
 
 
+async def _create_user_session_and_get_prefs(
+    user: UserModel,
+    request: Optional[Request],
+    db: AsyncSession
+) -> tuple[str, UserSessionModel, UserPreferenceModel]:
+    import uuid
+    from datetime import datetime, timedelta
+    from app.core.config import settings
+
+    token_jti = str(uuid.uuid4())
+    expires_at = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    ip_addr = "127.0.0.1"
+    user_agent = "desktop/browser"
+    if request:
+        if request.client and request.client.host:
+            ip_addr = request.client.host
+        hdr_ua = request.headers.get("user-agent")
+        if hdr_ua:
+            user_agent = hdr_ua[:250]
+
+    session = UserSessionModel(
+        user_id=user.id,
+        business_id=user.business_id,
+        token_jti=token_jti,
+        device_info=user_agent,
+        ip_address=ip_addr,
+        is_active=True,
+        expires_at=expires_at,
+        last_activity_at=datetime.utcnow(),
+        created_at=datetime.utcnow()
+    )
+    db.add(session)
+    user.last_login_at = datetime.utcnow()
+
+    pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == user.id))
+    pref = pref_res.scalar_one_or_none()
+    if not pref:
+        pref = UserPreferenceModel(
+            user_id=user.id,
+            business_id=user.business_id,
+            theme="dark",
+            language="es",
+            default_currency="USD",
+            sound_enabled=True,
+            table_rows_per_page=25,
+            compact_mode=False,
+            notifications={"push": True, "email": True, "inventory_alerts": True},
+            pos_quick_keys={"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
+            ui_preferences={"sidebar_collapsed": False}
+        )
+        db.add(pref)
+
+    await db.commit()
+    await db.refresh(session)
+    await db.refresh(pref)
+
+    token_claims = {
+        "sub": user.id,
+        "email": user.email,
+        "role": user.role,
+        "business_id": user.business_id,
+        "full_name": user.full_name,
+        "jti": token_jti
+    }
+    jwt_token = create_access_token(token_claims)
+
+    return jwt_token, session, pref
+
+
+async def get_current_user_and_session(
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+) -> tuple[UserModel, Optional[UserSessionModel]]:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token de autorización Bearer ausente o inválido."
+        )
+    token = authorization.split(" ")[1]
+    claims = decode_access_token(token)
+    if not claims or "sub" not in claims:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido o expirado."
+        )
+    user_id = claims["sub"]
+    jti = claims.get("jti")
+
+    user_res = await db.execute(select(UserModel).where(UserModel.id == user_id, UserModel.is_active == True))
+    user = user_res.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuario no encontrado o inactivo."
+        )
+
+    session = None
+    if jti:
+        sess_res = await db.execute(
+            select(UserSessionModel).where(
+                UserSessionModel.token_jti == jti,
+                UserSessionModel.is_active == True
+            )
+        )
+        session = sess_res.scalar_one_or_none()
+        if session:
+            exp = session.expires_at
+            now = datetime.now(exp.tzinfo) if exp.tzinfo is not None else datetime.utcnow()
+            if exp < now:
+                session.is_active = False
+                await db.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="La sesión ha expirado. Por favor inicie sesión nuevamente."
+                )
+            session.last_activity_at = datetime.utcnow()
+            await db.commit()
+
+    return user, session
+
+
 @api_router.post("/auth/google", response_model=AuthTokenResponse)
-async def login_google(payload: GoogleAuthRequest, db: AsyncSession = Depends(get_db)):
+async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """
     Autenticación con Google Identity Services (OAuth2).
-    Verifica el token de Google y emite un JWT firmado para la sesión de Xion-Manager.
+    Verifica el token de Google y emite un JWT firmado para la sesión de Xion-Manager con registro de sesión.
     """
     google_data = await verify_google_id_token(payload.id_token)
     email = google_data["email"].lower().strip()
@@ -478,7 +607,6 @@ async def login_google(payload: GoogleAuthRequest, db: AsyncSession = Depends(ge
     user = result.scalar_one_or_none()
 
     if not user:
-        # Obtener o crear negocio predeterminado para asociar al usuario
         biz_result = await db.execute(select(BusinessModel).limit(1))
         biz = biz_result.scalar_one_or_none()
         if not biz:
@@ -496,8 +624,6 @@ async def login_google(payload: GoogleAuthRequest, db: AsyncSession = Depends(ge
             await db.refresh(biz)
 
         business_id = biz.id
-
-        # Asignar rol: el primer usuario creado es OWNER, los siguientes ADMIN
         users_count_res = await db.execute(select(UserModel))
         users_count = len(users_count_res.scalars().all())
         role = "OWNER" if users_count == 0 else "ADMIN"
@@ -521,19 +647,12 @@ async def login_google(payload: GoogleAuthRequest, db: AsyncSession = Depends(ge
             detail="La cuenta se encuentra inactiva. Contacte al administrador."
         )
 
-    # Generar JWT firmado de Xion-Manager
-    token_claims = {
-        "sub": user.id,
-        "email": user.email,
-        "role": user.role,
-        "business_id": user.business_id,
-        "full_name": user.full_name
-    }
-    jwt_token = create_access_token(token_claims)
+    jwt_token, session, pref = await _create_user_session_and_get_prefs(user, request, db)
 
     return {
         "access_token": jwt_token,
         "token_type": "bearer",
+        "session_id": session.id,
         "user": {
             "id": user.id,
             "email": user.email,
@@ -542,22 +661,34 @@ async def login_google(payload: GoogleAuthRequest, db: AsyncSession = Depends(ge
             "business_id": user.business_id,
             "branch_id": user.branch_id,
             "approval_status": user.approval_status,
+            "avatar_url": user.avatar_url,
             "is_active": user.is_active,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
+        },
+        "preferences": {
+            "theme": pref.theme,
+            "language": pref.language,
+            "default_currency": pref.default_currency,
+            "sound_enabled": pref.sound_enabled,
+            "table_rows_per_page": pref.table_rows_per_page,
+            "compact_mode": pref.compact_mode,
+            "notifications": pref.notifications or {},
+            "pos_quick_keys": pref.pos_quick_keys or {},
+            "ui_preferences": pref.ui_preferences or {}
         }
     }
 
 @api_router.post("/auth/login", response_model=AuthTokenResponse)
-async def login_standard(payload: StandardLoginRequest, db: AsyncSession = Depends(get_db)):
+async def login_standard(payload: StandardLoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """
-    Autenticación estándar mediante correo electrónico y contraseña con emisión de JWT.
+    Autenticación estándar mediante correo electrónico y contraseña con emisión de JWT y sesión trazable.
     """
     email = payload.email.lower().strip()
     result = await db.execute(select(UserModel).where(UserModel.email == email))
     user = result.scalar_one_or_none()
 
     if not user:
-        # Fallback para usuario admin inicial si aún no fue sembrado
         if email == "admin@xion.com" and payload.password:
             biz_result = await db.execute(select(BusinessModel).limit(1))
             biz = biz_result.scalar_one_or_none()
@@ -599,18 +730,18 @@ async def login_standard(payload: StandardLoginRequest, db: AsyncSession = Depen
                 detail="Credenciales de acceso inválidas"
             )
 
-    token_claims = {
-        "sub": user.id,
-        "email": user.email,
-        "role": user.role,
-        "business_id": user.business_id,
-        "full_name": user.full_name
-    }
-    jwt_token = create_access_token(token_claims)
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La cuenta se encuentra inactiva. Contacte al administrador."
+        )
+
+    jwt_token, session, pref = await _create_user_session_and_get_prefs(user, request, db)
 
     return {
         "access_token": jwt_token,
         "token_type": "bearer",
+        "session_id": session.id,
         "user": {
             "id": user.id,
             "email": user.email,
@@ -619,16 +750,29 @@ async def login_standard(payload: StandardLoginRequest, db: AsyncSession = Depen
             "business_id": user.business_id,
             "branch_id": user.branch_id,
             "approval_status": user.approval_status,
+            "avatar_url": user.avatar_url,
             "is_active": user.is_active,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
+        },
+        "preferences": {
+            "theme": pref.theme,
+            "language": pref.language,
+            "default_currency": pref.default_currency,
+            "sound_enabled": pref.sound_enabled,
+            "table_rows_per_page": pref.table_rows_per_page,
+            "compact_mode": pref.compact_mode,
+            "notifications": pref.notifications or {},
+            "pos_quick_keys": pref.pos_quick_keys or {},
+            "ui_preferences": pref.ui_preferences or {}
         }
     }
 
 
 @api_router.post("/auth/register", response_model=AuthTokenResponse)
-async def register_user(payload: RegisterUserRequest, db: AsyncSession = Depends(get_db)):
+async def register_user(payload: RegisterUserRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """
-    Registro de nuevos usuarios. Crea la cuenta inicial con rol OWNER y bandera de onboarding inicial.
+    Registro de nuevos usuarios. Crea la cuenta inicial con rol OWNER, sesión activa y preferencias por defecto.
     """
     email = payload.email.lower().strip()
     result = await db.execute(select(UserModel).where(UserModel.email == email))
@@ -670,18 +814,12 @@ async def register_user(payload: RegisterUserRequest, db: AsyncSession = Depends
     await db.commit()
     await db.refresh(user)
 
-    token_claims = {
-        "sub": user.id,
-        "email": user.email,
-        "role": user.role,
-        "business_id": user.business_id,
-        "full_name": user.full_name
-    }
-    jwt_token = create_access_token(token_claims)
+    jwt_token, session, pref = await _create_user_session_and_get_prefs(user, request, db)
 
     return {
         "access_token": jwt_token,
         "token_type": "bearer",
+        "session_id": session.id,
         "user": {
             "id": user.id,
             "email": user.email,
@@ -690,11 +828,25 @@ async def register_user(payload: RegisterUserRequest, db: AsyncSession = Depends
             "role": user.role,
             "business_id": user.business_id,
             "approval_status": user.approval_status,
+            "avatar_url": user.avatar_url,
             "is_active": user.is_active,
             "onboarding_completed": False,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
+        },
+        "preferences": {
+            "theme": pref.theme,
+            "language": pref.language,
+            "default_currency": pref.default_currency,
+            "sound_enabled": pref.sound_enabled,
+            "table_rows_per_page": pref.table_rows_per_page,
+            "compact_mode": pref.compact_mode,
+            "notifications": pref.notifications or {},
+            "pos_quick_keys": pref.pos_quick_keys or {},
+            "ui_preferences": pref.ui_preferences or {}
         }
     }
+
 
 
 @api_router.post("/onboarding/complete")
@@ -808,6 +960,25 @@ async def complete_onboarding(payload: OnboardingCompleteRequest, db: AsyncSessi
         except Exception:
             pass
 
+    # 4. Guardar preferencias del usuario si se especificaron
+    if payload.preferences and payload.user_id:
+        pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == payload.user_id))
+        pref = pref_res.scalar_one_or_none()
+        if not pref:
+            pref = UserPreferenceModel(
+                user_id=payload.user_id,
+                business_id=biz.id,
+                **{k: v for k, v in payload.preferences.items() if hasattr(UserPreferenceModel, k)}
+            )
+            db.add(pref)
+        else:
+            for k, v in payload.preferences.items():
+                if hasattr(pref, k):
+                    setattr(pref, k, v)
+            pref.updated_at = datetime.utcnow()
+            db.add(pref)
+        await db.commit()
+
     return {
         "status": "success",
         "message": "Configuración inicial y onboarding completados exitosamente.",
@@ -838,8 +1009,10 @@ async def complete_onboarding(payload: OnboardingCompleteRequest, db: AsyncSessi
 @api_router.post("/auth/login-bypass")
 async def login_bypass(role: str = Body(default="OWNER", embed=True)):
     """
-    Bypass de desarrollo para testing ágil de roles RBAC con token JWT firmado.
+    Bypass de desarrollo para testing ágil de roles RBAC con token JWT firmado y soporte de sesión.
     """
+    import uuid
+    token_jti = str(uuid.uuid4())
     user_data = {
         "id": f"usr-{role.lower()}-01",
         "email": f"{role.lower()}@xion.com",
@@ -852,13 +1025,289 @@ async def login_bypass(role: str = Body(default="OWNER", embed=True)):
         "sub": user_data["id"],
         "email": user_data["email"],
         "role": user_data["role"],
-        "full_name": user_data["full_name"]
+        "business_id": "biz-101",
+        "full_name": user_data["full_name"],
+        "jti": token_jti
     })
     return {
         **user_data,
+        "business_id": "biz-101",
         "access_token": jwt_token,
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "session_id": f"sess-{token_jti[:8]}",
+        "preferences": {
+            "theme": "dark",
+            "language": "es",
+            "default_currency": "USD",
+            "sound_enabled": True,
+            "table_rows_per_page": 25,
+            "compact_mode": False,
+            "notifications": {"push": True, "email": True, "inventory_alerts": True},
+            "pos_quick_keys": {"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
+            "ui_preferences": {"sidebar_collapsed": False}
+        }
     }
+
+
+# ==============================================================================
+# GESTIÓN DE SESIONES JWT Y PREFERENCIAS MULTIUSUARIO
+# ==============================================================================
+
+@api_router.get("/users/me", response_model=UserMeResponse)
+async def get_user_profile(
+    auth_data: tuple[UserModel, Optional[UserSessionModel]] = Depends(get_current_user_and_session),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Obtiene el perfil completo del usuario autenticado, sus preferencias activas y su sesión actual.
+    """
+    user, session = auth_data
+    pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == user.id))
+    pref = pref_res.scalar_one_or_none()
+    if not pref:
+        pref = UserPreferenceModel(
+            user_id=user.id,
+            business_id=user.business_id,
+            theme="dark",
+            language="es",
+            default_currency="USD",
+            sound_enabled=True,
+            table_rows_per_page=25,
+            compact_mode=False,
+            notifications={"push": True, "email": True, "inventory_alerts": True},
+            pos_quick_keys={"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
+            ui_preferences={"sidebar_collapsed": False}
+        )
+        db.add(pref)
+        await db.commit()
+        await db.refresh(pref)
+
+    session_data = None
+    if session:
+        session_data = UserSessionResponse(
+            id=session.id,
+            user_id=session.user_id,
+            business_id=session.business_id,
+            token_jti=session.token_jti,
+            terminal_id=session.terminal_id,
+            device_info=session.device_info,
+            ip_address=session.ip_address,
+            is_active=session.is_active,
+            expires_at=session.expires_at.isoformat(),
+            last_activity_at=session.last_activity_at.isoformat() if session.last_activity_at else None,
+            created_at=session.created_at.isoformat(),
+            is_current=True
+        )
+
+    return {
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "phone": user.phone,
+            "role": user.role,
+            "business_id": user.business_id,
+            "branch_id": user.branch_id,
+            "approval_status": user.approval_status,
+            "avatar_url": user.avatar_url,
+            "is_active": user.is_active,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+            "created_at": user.created_at.isoformat() if user.created_at else None
+        },
+        "preferences": {
+            "id": pref.id,
+            "user_id": pref.user_id,
+            "business_id": pref.business_id,
+            "theme": pref.theme,
+            "language": pref.language,
+            "default_currency": pref.default_currency,
+            "sound_enabled": pref.sound_enabled,
+            "table_rows_per_page": pref.table_rows_per_page,
+            "compact_mode": pref.compact_mode,
+            "notifications": pref.notifications or {},
+            "pos_quick_keys": pref.pos_quick_keys or {},
+            "ui_preferences": pref.ui_preferences or {},
+            "created_at": pref.created_at.isoformat() if pref.created_at else None,
+            "updated_at": pref.updated_at.isoformat() if pref.updated_at else None
+        },
+        "session": session_data
+    }
+
+
+@api_router.get("/users/me/preferences", response_model=UserPreferenceResponse)
+async def get_my_preferences(
+    auth_data: tuple[UserModel, Optional[UserSessionModel]] = Depends(get_current_user_and_session),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Obtiene las preferencias de configuración y UI del usuario autenticado.
+    """
+    user, _ = auth_data
+    pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == user.id))
+    pref = pref_res.scalar_one_or_none()
+    if not pref:
+        pref = UserPreferenceModel(
+            user_id=user.id,
+            business_id=user.business_id,
+            theme="dark",
+            language="es",
+            default_currency="USD",
+            sound_enabled=True,
+            table_rows_per_page=25,
+            compact_mode=False,
+            notifications={"push": True, "email": True, "inventory_alerts": True},
+            pos_quick_keys={"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
+            ui_preferences={"sidebar_collapsed": False}
+        )
+        db.add(pref)
+        await db.commit()
+        await db.refresh(pref)
+
+    return {
+        "id": pref.id,
+        "user_id": pref.user_id,
+        "business_id": pref.business_id,
+        "theme": pref.theme,
+        "language": pref.language,
+        "default_currency": pref.default_currency,
+        "sound_enabled": pref.sound_enabled,
+        "table_rows_per_page": pref.table_rows_per_page,
+        "compact_mode": pref.compact_mode,
+        "notifications": pref.notifications or {},
+        "pos_quick_keys": pref.pos_quick_keys or {},
+        "ui_preferences": pref.ui_preferences or {},
+        "created_at": pref.created_at.isoformat() if pref.created_at else None,
+        "updated_at": pref.updated_at.isoformat() if pref.updated_at else None
+    }
+
+
+@api_router.put("/users/me/preferences", response_model=UserPreferenceResponse)
+async def update_my_preferences(
+    payload: UserPreferenceUpdate,
+    auth_data: tuple[UserModel, Optional[UserSessionModel]] = Depends(get_current_user_and_session),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Actualiza quirúrgicamente las preferencias y configuraciones del usuario autenticado.
+    """
+    user, _ = auth_data
+    pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == user.id))
+    pref = pref_res.scalar_one_or_none()
+    if not pref:
+        pref = UserPreferenceModel(user_id=user.id, business_id=user.business_id)
+        db.add(pref)
+
+    if payload.theme is not None:
+        pref.theme = payload.theme
+    if payload.language is not None:
+        pref.language = payload.language
+    if payload.default_currency is not None:
+        pref.default_currency = payload.default_currency
+    if payload.sound_enabled is not None:
+        pref.sound_enabled = payload.sound_enabled
+    if payload.table_rows_per_page is not None:
+        pref.table_rows_per_page = payload.table_rows_per_page
+    if payload.compact_mode is not None:
+        pref.compact_mode = payload.compact_mode
+    if payload.notifications is not None:
+        pref.notifications = payload.notifications
+    if payload.pos_quick_keys is not None:
+        pref.pos_quick_keys = payload.pos_quick_keys
+    if payload.ui_preferences is not None:
+        pref.ui_preferences = payload.ui_preferences
+
+    pref.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(pref)
+
+    return {
+        "id": pref.id,
+        "user_id": pref.user_id,
+        "business_id": pref.business_id,
+        "theme": pref.theme,
+        "language": pref.language,
+        "default_currency": pref.default_currency,
+        "sound_enabled": pref.sound_enabled,
+        "table_rows_per_page": pref.table_rows_per_page,
+        "compact_mode": pref.compact_mode,
+        "notifications": pref.notifications or {},
+        "pos_quick_keys": pref.pos_quick_keys or {},
+        "ui_preferences": pref.ui_preferences or {},
+        "created_at": pref.created_at.isoformat() if pref.created_at else None,
+        "updated_at": pref.updated_at.isoformat() if pref.updated_at else None
+    }
+
+
+@api_router.get("/auth/sessions", response_model=List[UserSessionResponse])
+async def list_user_sessions(
+    auth_data: tuple[UserModel, Optional[UserSessionModel]] = Depends(get_current_user_and_session),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Lista las sesiones activas del usuario autenticado para control multi-dispositivo y seguridad.
+    """
+    user, current_session = auth_data
+    result = await db.execute(
+        select(UserSessionModel)
+        .where(UserSessionModel.user_id == user.id, UserSessionModel.is_active == True)
+        .order_by(UserSessionModel.created_at.desc())
+    )
+    sessions = result.scalars().all()
+    return [
+        UserSessionResponse(
+            id=s.id,
+            user_id=s.user_id,
+            business_id=s.business_id,
+            token_jti=s.token_jti,
+            terminal_id=s.terminal_id,
+            device_info=s.device_info,
+            ip_address=s.ip_address,
+            is_active=s.is_active,
+            expires_at=s.expires_at.isoformat(),
+            last_activity_at=s.last_activity_at.isoformat() if s.last_activity_at else None,
+            created_at=s.created_at.isoformat(),
+            is_current=(current_session is not None and s.id == current_session.id)
+        )
+        for s in sessions
+    ]
+
+
+@api_router.delete("/auth/sessions/{session_id}")
+async def revoke_session(
+    session_id: str,
+    auth_data: tuple[UserModel, Optional[UserSessionModel]] = Depends(get_current_user_and_session),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Revoca inmediatamente una sesión específica (cierre remoto de dispositivo).
+    """
+    user, _ = auth_data
+    result = await db.execute(
+        select(UserSessionModel).where(UserSessionModel.id == session_id, UserSessionModel.user_id == user.id)
+    )
+    target_session = result.scalar_one_or_none()
+    if not target_session:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+    target_session.is_active = False
+    await db.commit()
+    return {"status": "success", "message": "Sesión revocada exitosamente"}
+
+
+@api_router.post("/auth/logout")
+async def logout(
+    auth_data: tuple[UserModel, Optional[UserSessionModel]] = Depends(get_current_user_and_session),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Cierra la sesión actual del usuario invalidando el JTI en la base de datos.
+    """
+    _, session = auth_data
+    if session:
+        session.is_active = False
+        await db.commit()
+    return {"status": "success", "message": "Sesión cerrada correctamente"}
+
 
 # 1. Dashboard
 @api_router.get("/dashboard/metrics")

@@ -477,6 +477,55 @@ class AuthTokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: Dict[str, Any]
+    session_id: Optional[str] = None
+    preferences: Optional[Dict[str, Any]] = None
+
+class UserPreferenceUpdate(BaseModel):
+    theme: Optional[str] = Field(None, description="Tema visual: 'dark' | 'light' | 'system'")
+    language: Optional[str] = Field(None, description="Código de idioma: 'es' | 'en'")
+    default_currency: Optional[str] = Field(None, description="Moneda por defecto: 'USD' | 'VES'")
+    sound_enabled: Optional[bool] = Field(None, description="Efectos de sonido activos")
+    table_rows_per_page: Optional[int] = Field(None, ge=5, le=100, description="Paginación de tablas")
+    compact_mode: Optional[bool] = Field(None, description="Modo compacto de interfaz")
+    notifications: Optional[Dict[str, Any]] = Field(None, description="Configuración de notificaciones")
+    pos_quick_keys: Optional[Dict[str, Any]] = Field(None, description="Atajos de teclado del POS")
+    ui_preferences: Optional[Dict[str, Any]] = Field(None, description="Preferencias UI del usuario")
+
+class UserPreferenceResponse(BaseModel):
+    id: str
+    user_id: str
+    business_id: str
+    theme: str = "dark"
+    language: str = "es"
+    default_currency: str = "USD"
+    sound_enabled: bool = True
+    table_rows_per_page: int = 25
+    compact_mode: bool = False
+    notifications: Dict[str, Any] = Field(default_factory=dict)
+    pos_quick_keys: Dict[str, Any] = Field(default_factory=dict)
+    ui_preferences: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+class UserSessionResponse(BaseModel):
+    id: str
+    user_id: str
+    business_id: str
+    token_jti: str
+    terminal_id: Optional[str] = None
+    device_info: Optional[str] = None
+    ip_address: Optional[str] = None
+    is_active: bool = True
+    expires_at: str
+    last_activity_at: Optional[str] = None
+    created_at: str
+    is_current: bool = False
+
+class UserMeResponse(BaseModel):
+    user: Dict[str, Any]
+    preferences: UserPreferenceResponse
+    session: Optional[UserSessionResponse] = None
+
 
 
 
