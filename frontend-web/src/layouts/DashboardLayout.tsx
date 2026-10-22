@@ -27,7 +27,8 @@ import {
   Menu,
   Sun,
   Moon,
-  Receipt
+  Receipt,
+  Sparkles
 } from 'lucide-react';
 import { api, applySystemPreferences } from '../services/api';
 import { NotificationItem, Role, User } from '../types';
@@ -321,6 +322,18 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
                     >
                       <UserIcon className="w-4 h-4 text-cyan-400" />
                       <span>Mi Perfil</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        localStorage.removeItem(`xion_onboarding_completed_${currentUser.id}`);
+                        setCurrentUser({ ...currentUser, onboarding_completed: false });
+                        setShowUserMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium text-cyan-300 hover:bg-cyan-950/40 flex items-center gap-2.5 transition-colors"
+                    >
+                      <Sparkles className="w-4 h-4 text-cyan-400" />
+                      <span>Seleccionar Rol / Onboarding</span>
                     </button>
                   </div>
 

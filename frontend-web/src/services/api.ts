@@ -34,319 +34,39 @@ import {
 } from '../types';
 
 
-let mockInventory: ProductInventory[] = [
-  {
-    id: 'inv-1',
-    product_id: 'p-1',
-    barcode: '7591234567890',
-    sku: 'PROD-HAR-01',
-    name: 'Harina Pan 1kg',
-    description: 'Harina de maíz precocida blanca tradicional',
-    category: 'Víveres',
-    cost_price: 0.95,
-    sale_price: 1.30,
-    wholesale_price: 1.15,
-    package_quantity: 20,
-    product_type: 'physical',
-    tax_type: 'none',
-    unit_measure: 'UND',
-    current_stock: 150,
-    min_stock_alert: 20,
-    image_url: 'https://images.unsplash.com/photo-1586201375761-83865001e31c?w=300',
-    branch_id: 'branch-1',
-    branch_name: 'Sucursal Principal - Centro',
-    combo_items: []
-  },
-  {
-    id: 'inv-2',
-    product_id: 'p-2',
-    barcode: '7599876543210',
-    sku: 'PROD-ACE-02',
-    name: 'Aceite de Maíz 1L',
-    description: 'Aceite vegetal comestible refinado',
-    category: 'Víveres',
-    cost_price: 2.10,
-    sale_price: 2.90,
-    wholesale_price: 2.60,
-    package_quantity: 12,
-    product_type: 'physical',
-    tax_type: 'vat',
-    unit_measure: 'UND',
-    current_stock: 8,
-    min_stock_alert: 15,
-    image_url: 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=300',
-    branch_id: 'branch-1',
-    branch_name: 'Sucursal Principal - Centro',
-    combo_items: []
-  },
-  {
-    id: 'inv-3',
-    product_id: 'p-3',
-    barcode: '7594567890123',
-    sku: 'PROD-AZU-03',
-    name: 'Azúcar Refinada 1kg',
-    description: 'Azúcar de caña blanca refinada',
-    category: 'Víveres',
-    cost_price: 0.85,
-    sale_price: 1.15,
-    wholesale_price: 1.05,
-    package_quantity: 25,
-    product_type: 'physical',
-    tax_type: 'none',
-    unit_measure: 'UND',
-    current_stock: 45,
-    min_stock_alert: 10,
-    image_url: '',
-    branch_id: 'branch-1',
-    branch_name: 'Sucursal Principal - Centro',
-    combo_items: []
-  },
-  {
-    id: 'inv-4',
-    product_id: 'p-4',
-    barcode: '7597890123456',
-    sku: 'PROD-ARR-04',
-    name: 'Arroz Blanco Tradicional 1kg',
-    description: 'Arroz tipo I grano largo',
-    category: 'Víveres',
-    cost_price: 1.05,
-    sale_price: 1.45,
-    wholesale_price: 1.30,
-    package_quantity: 24,
-    product_type: 'physical',
-    tax_type: 'none',
-    unit_measure: 'UND',
-    current_stock: 2,
-    min_stock_alert: 15,
-    image_url: '',
-    branch_id: 'branch-1',
-    branch_name: 'Sucursal Principal - Centro',
-    combo_items: []
-  },
-  {
-    id: 'inv-5',
-    product_id: 'p-5',
-    barcode: '7590001112223',
-    sku: 'CMB-DESAYUNO-01',
-    name: 'Combo Desayuno Criollo (Harina + Aceite + Azúcar)',
-    description: 'Pack familiar ahorro desayuno venezolano',
-    category: 'Combos',
-    cost_price: 3.90,
-    sale_price: 4.99,
-    wholesale_price: 4.70,
-    package_quantity: 1,
-    product_type: 'virtual',
-    tax_type: 'none',
-    unit_measure: 'UND',
-    current_stock: 10,
-    min_stock_alert: 5,
-    image_url: '',
-    branch_id: 'branch-1',
-    branch_name: 'Sucursal Principal - Centro',
-    combo_items: [
-      { product_id: 'p-1', product_name: 'Harina Pan 1kg', quantity: 1 },
-      { product_id: 'p-2', product_name: 'Aceite de Maíz 1L', quantity: 1 },
-      { product_id: 'p-3', product_name: 'Azúcar Refinada 1kg', quantity: 1 }
-    ]
-  }
-];
+let mockInventory: ProductInventory[] = [];
 
-let mockSuppliers: SupplierItem[] = [
-  {
-    id: 'sup-001',
-    name: 'Distribuidora Alimentos Polar C.A.',
-    rif: 'J-00041372-9',
-    email: 'pedidos@polar.com',
-    phone: '+58 212-2023111',
-    address: 'Los Cortijos de Lourdes, Caracas',
-    category: 'Alimentos y Bebidas',
-    payment_terms_days: 15,
-    current_balance_usd: 0.0,
-    is_active: true,
-    created_at: '2026-01-10'
-  },
-  {
-    id: 'sup-002',
-    name: 'Comercializadora Cargill Venezuela S.R.L.',
-    rif: 'J-30591823-1',
-    email: 'atencion@cargill.com.ve',
-    phone: '+58 241-8742000',
-    address: 'Zona Industrial Castillito, Valencia, Carabobo',
-    category: 'Granos y Aceites',
-    payment_terms_days: 30,
-    current_balance_usd: 350.50,
-    is_active: true,
-    created_at: '2026-02-05'
-  },
-  {
-    id: 'sup-003',
-    name: 'Monaca - Molinos Nacionales C.A.',
-    rif: 'J-00015940-7',
-    email: 'ventas@monaca.com.ve',
-    phone: '+58 212-9014000',
-    address: 'Av. Principal Los Ruices, Caracas',
-    category: 'Harinas y Derivados',
-    payment_terms_days: 21,
-    current_balance_usd: 0.0,
-    is_active: true,
-    created_at: '2026-03-12'
-  }
-];
+let mockSuppliers: SupplierItem[] = [];
 
-let mockPurchases: PurchaseRecord[] = [
-  {
-    id: 'pur-001',
-    supplier_id: 'sup-001',
-    supplier_name: 'Distribuidora Alimentos Polar C.A.',
-    supplier_rif: 'J-00041372-9',
-    invoice_number: 'FAC-00892',
-    branch_id: 'branch-1',
-    branch_name: 'Sucursal Principal - Centro',
-    date: '2026-10-06',
-    total_amount_usd: 1420.00,
-    total_amount_bs: 53250.00,
-    exchange_rate: 37.50,
-    payment_type: 'cash',
-    payment_status: 'paid',
-    paid_amount_usd: 1420.00,
-    pending_amount_usd: 0.0,
-    credit_days: 0,
-    notes: 'Despacho directo en depósito central',
-    items_count: 8,
-    items: [
-      {
-        product_id: 'p-1',
-        product_name: 'Harina Pan 1kg',
-        product_sku: 'PROD-HAR-01',
-        quantity: 100,
-        lot_number: 'LOT-2026-A1',
-        cost_usd: 0.95,
-        cost_bs: 35.62,
-        total_usd: 95.00
-      }
-    ]
-  },
-  {
-    id: 'pur-002',
-    supplier_id: 'sup-002',
-    supplier_name: 'Comercializadora Cargill Venezuela S.R.L.',
-    supplier_rif: 'J-30591823-1',
-    invoice_number: 'FAC-99120',
-    branch_id: 'branch-2',
-    branch_name: 'Sucursal Norte - CC Lago Mall',
-    date: '2026-10-07',
-    total_amount_usd: 850.50,
-    total_amount_bs: 31893.75,
-    exchange_rate: 37.50,
-    payment_type: 'credit',
-    payment_status: 'partial',
-    paid_amount_usd: 500.00,
-    pending_amount_usd: 350.50,
-    credit_days: 30,
-    notes: 'Crédito a 30 días, anticipo 500$',
-    items_count: 4,
-    items: [
-      {
-        product_id: 'p-2',
-        product_name: 'Aceite de Maíz 1L',
-        product_sku: 'PROD-ACE-02',
-        quantity: 50,
-        lot_number: 'LOT-CG-99',
-        cost_usd: 2.10,
-        cost_bs: 78.75,
-        total_usd: 105.00
-      }
-    ]
-  }
-];
+let mockPurchases: PurchaseRecord[] = [];
 
-let mockTransfers: StockTransfer[] = [
-  {
-    id: 'tr-001',
-    transfer_code: 'TR-102',
-    origin_branch_id: 'branch-1',
-    origin_branch_name: 'Sucursal Principal - Centro',
-    destination_branch_id: 'branch-2',
-    destination_branch_name: 'Sucursal Norte - CC Lago Mall',
-    product_id: 'p-1',
-    product_name: 'Harina Pan 1kg',
-    quantity: 20,
-    status: 'COMPLETED',
-    notes: 'Reposición semanal de stock alta demanda',
-    created_at: '2026-10-08 10:15:00'
-  }
-];
+let mockTransfers: StockTransfer[] = [];
 
 let mockShrinkages: InventoryShrinkage[] = [];
 
 let mockCategories: CategoryItem[] = [
   { id: 'cat-1', name: 'Víveres', description: 'Alimentos no perecederos y despensa', color: '#3B82F6', icon: 'ShoppingBag', is_active: true, full_path: 'Víveres' },
-  { id: 'cat-2', name: 'Harinas y Granos', parent_id: 'cat-1', description: 'Harina de maíz, trigo, arroz y legumbres', color: '#60A5FA', icon: 'Wheat', is_active: true, full_path: 'Víveres > Harinas y Granos' },
-  { id: 'cat-3', name: 'Aceites y Grasas', parent_id: 'cat-1', description: 'Aceite vegetal, margarinas, mantecas', color: '#F59E0B', icon: 'Droplet', is_active: true, full_path: 'Víveres > Aceites y Grasas' },
-  { id: 'cat-4', name: 'Bebidas y Licores', description: 'Refrescos, jugos, agua mineral y licores', color: '#10B981', icon: 'Coffee', is_active: true, full_path: 'Bebidas y Licores' },
-  { id: 'cat-5', name: 'Combos y Promociones', description: 'Paquetes de productos armados', color: '#8B5CF6', icon: 'PackageCheck', is_active: true, full_path: 'Combos y Promociones' },
-  { id: 'cat-6', name: 'Limpieza y Hogar', description: 'Detergentes, desinfectantes y cuidado del hogar', color: '#EC4899', icon: 'Sparkles', is_active: true, full_path: 'Limpieza y Hogar' }
+  { id: 'cat-2', name: 'Bebidas y Licores', description: 'Refrescos, jugos, agua mineral y licores', color: '#10B981', icon: 'Coffee', is_active: true, full_path: 'Bebidas y Licores' },
+  { id: 'cat-3', name: 'Combos y Promociones', description: 'Paquetes de productos armados', color: '#8B5CF6', icon: 'PackageCheck', is_active: true, full_path: 'Combos y Promociones' },
+  { id: 'cat-4', name: 'Limpieza y Hogar', description: 'Detergentes, desinfectantes y cuidado del hogar', color: '#EC4899', icon: 'Sparkles', is_active: true, full_path: 'Limpieza y Hogar' }
 ];
 
-let mockSupplierLedger: Record<string, SupplierPayableLedgerItem[]> = {
-  'sup-002': [
-    {
-      id: 'led-1',
-      supplier_id: 'sup-002',
-      purchase_id: 'pur-002',
-      invoice_number: 'FAC-99120',
-      tx_type: 'CHARGE',
-      movement_type: 'CREDIT_CHARGE',
-      amount_usd: 850.50,
-      exchange_rate: 37.50,
-      balance_after_usd: 850.50,
-      notes: 'Factura a crédito 30 días',
-      created_at: '2026-10-07T10:00:00Z'
-    },
-    {
-      id: 'led-2',
-      supplier_id: 'sup-002',
-      purchase_id: 'pur-002',
-      invoice_number: 'FAC-99120',
-      tx_type: 'PAYMENT',
-      movement_type: 'PAYMENT_ABONO',
-      amount_usd: 500.00,
-      exchange_rate: 37.50,
-      balance_after_usd: 350.50,
-      notes: 'Anticipo inicial contra factura FAC-99120',
-      created_at: '2026-10-07T10:05:00Z'
-    }
-  ]
-};
+let mockSupplierLedger: Record<string, SupplierPayableLedgerItem[]> = {};
 
 let mockBranches: Branch[] = [
   {
     id: 'branch-1',
     business_id: 'biz-101',
-    name: 'Sucursal Principal - Centro',
-    address: 'Av. Bolívar, Calle 4 #12-45, Maracaibo',
+    name: 'Sucursal Principal',
+    address: 'Sede Principal',
     latitude: 10.6417,
     longitude: -71.6125,
-    phone: '+58 414-1234567',
-    manager_user_id: 'usr-m1',
-    manager_name: 'Alejandro Colina',
-    active_cash_registers_count: 2,
+    phone: '+58 414-0000000',
+    manager_user_id: 'usr-admin-01',
+    manager_name: 'Administrador',
+    active_cash_registers_count: 1,
     is_active: true,
-    created_at: '2026-01-15T10:00:00Z'
-  },
-  {
-    id: 'branch-2',
-    business_id: 'biz-101',
-    name: 'Sucursal Norte - CC Lago Mall',
-    address: 'Av. 2 El Milagro, Nivel PB, Local 12, Maracaibo',
-    latitude: 10.6698,
-    longitude: -71.5989,
-    phone: '+58 412-7654321',
-    manager_user_id: 'usr-m2',
-    manager_name: 'María Silva',
-    active_cash_registers_count: 2,
-    is_active: true,
-    created_at: '2026-03-20T14:30:00Z'
+    created_at: '2026-01-01T00:00:00Z'
   }
 ];
 
@@ -354,79 +74,19 @@ let mockCashRegisters: CashRegister[] = [
   {
     id: 'reg-01',
     branch_id: 'branch-1',
-    branch_name: 'Sucursal Principal - Centro',
-    name: 'Caja 01 - Principal',
-    hardware_uuid: 'HW-POS-01-A92B',
-    status: 'OPEN',
+    branch_name: 'Sucursal Principal',
+    name: 'Caja 01',
+    hardware_uuid: 'HW-POS-01',
+    status: 'CLOSED',
     is_active: true,
-    current_operator: 'Carlos Mendoza',
-    today_sales_total: 450.00,
-    allowed_user_ids: ['usr-admin-01', 'usr-cashier-01'],
-    payment_methods: ['CASH_USD', 'CASH_BS', 'PAGO_MOVIL', 'DEBIT_CARD', 'ZELLE'],
+    current_operator: undefined,
+    today_sales_total: 0.00,
+    allowed_user_ids: ['usr-admin-01'],
+    payment_methods: ['CASH_USD', 'CASH_BS', 'PAGO_MOVIL', 'DEBIT_CARD'],
     latitude: 10.6417,
     longitude: -71.6125,
-    location_name: 'Pasillo Central PB',
-    created_at: '2026-01-16T08:00:00Z',
-    device_paired: true,
-    device_token_preview: 'dev_tok_X9-B42',
-    paired_at: '2026-01-16T08:05:00Z'
-  },
-  {
-    id: 'reg-02',
-    branch_id: 'branch-1',
-    branch_name: 'Sucursal Principal - Centro',
-    name: 'Caja 02 - Pasillo Rápido',
-    hardware_uuid: 'HW-POS-02-C77D',
-    status: 'CLOSED',
-    is_active: true,
-    current_operator: undefined,
-    today_sales_total: 0.00,
-    allowed_user_ids: ['usr-admin-01', 'usr-cashier-01'],
-    payment_methods: ['CASH_USD', 'CASH_BS', 'PAGO_MOVIL', 'DEBIT_CARD'],
-    latitude: 10.6420,
-    longitude: -71.6121,
-    location_name: 'Salida Rápida Pasillo Norte',
-    created_at: '2026-01-16T08:30:00Z',
-    device_paired: true,
-    device_token_preview: 'dev_tok_K2-M89',
-    paired_at: '2026-01-16T08:35:00Z'
-  },
-  {
-    id: 'reg-03',
-    branch_id: 'branch-2',
-    branch_name: 'Sucursal Norte - CC Lago Mall',
-    name: 'Caja 01 - Lago Mall',
-    hardware_uuid: 'HW-POS-03-F11E',
-    status: 'OPEN',
-    is_active: true,
-    current_operator: 'Pedro Ramos',
-    today_sales_total: 290.50,
-    allowed_user_ids: ['usr-branch_manager-01', 'usr-cashier-01'],
-    payment_methods: ['CASH_USD', 'CASH_BS', 'PAGO_MOVIL', 'DEBIT_CARD', 'ZELLE'],
-    latitude: 10.6698,
-    longitude: -71.5989,
-    location_name: 'Nivel PB - Entrada Mall',
-    created_at: '2026-03-21T09:00:00Z',
-    device_paired: true,
-    device_token_preview: 'dev_tok_R7-V14',
-    paired_at: '2026-03-21T09:10:00Z'
-  },
-  {
-    id: 'reg-04',
-    branch_id: 'branch-2',
-    branch_name: 'Sucursal Norte - CC Lago Mall',
-    name: 'Caja 02 - Express',
-    hardware_uuid: 'HW-POS-04-K88M',
-    status: 'CLOSED',
-    is_active: true,
-    current_operator: undefined,
-    today_sales_total: 0.00,
-    allowed_user_ids: ['usr-branch_manager-01'],
-    payment_methods: ['CASH_USD', 'CASH_BS', 'PAGO_MOVIL'],
-    latitude: 10.6701,
-    longitude: -71.5985,
-    location_name: 'Área Gourmet Express',
-    created_at: '2026-03-21T09:30:00Z',
+    location_name: 'Sede Principal',
+    created_at: '2026-01-01T00:00:00Z',
     device_paired: false
   }
 ];
@@ -669,72 +329,7 @@ let mockXionPayPlans: XionPayPlan[] = [
   }
 ];
 
-let mockPaymentReports: PaymentReportItem[] = [
-  {
-    id: 'rep-001',
-    business_id: 'biz-101',
-    order_id: 'FAC-10023',
-    concept: 'Pago Plan Comercio - Mensual',
-    payment_method: 'pago_movil',
-    origin_bank: 'Banco de Venezuela',
-    dest_bank: 'Banesco Banco Universal',
-    payer_name: 'Inversiones Maracaibo S.A.',
-    payer_id_or_phone: '0414-9988776',
-    payer_email: 'contabilidad@invmaracaibo.com',
-    reference_number: '48291034',
-    amount_paid: 1875.00,
-    currency: 'VES',
-    exchange_rate: 37.50,
-    amount_base_equivalent: 50.00,
-    receipt_url: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600',
-    status: 'pending',
-    payment_date: '2026-10-15',
-    created_at: '2026-10-15T14:30:00Z',
-    notes: 'Pago Móvil procesado a primera hora'
-  },
-  {
-    id: 'rep-002',
-    business_id: 'biz-101',
-    order_id: 'FAC-10020',
-    concept: 'Pago Factura de Inventario Proveedor',
-    payment_method: 'zelle',
-    payer_name: 'Carlos Mendoza',
-    payer_email: 'carlos.mendoza@xion.com',
-    reference_number: 'ZL-991823',
-    amount_paid: 120.00,
-    currency: 'USD',
-    exchange_rate: 37.50,
-    amount_base_equivalent: 120.00,
-    receipt_url: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600',
-    status: 'approved',
-    verified_by: 'Administrador General',
-    verified_at: '2026-10-14T18:20:00Z',
-    payment_date: '2026-10-14',
-    created_at: '2026-10-14T17:45:00Z',
-    notes: 'Confirmado en portal Zelle'
-  },
-  {
-    id: 'rep-003',
-    business_id: 'biz-101',
-    order_id: 'FAC-10018',
-    concept: 'Suscripción Semestral',
-    payment_method: 'binance_pay',
-    payer_name: 'Pedro Ramos',
-    payer_email: 'pedro.cajero@xion.com',
-    reference_number: 'BP-881920412',
-    amount_paid: 270.00,
-    currency: 'USDT',
-    exchange_rate: 37.50,
-    amount_base_equivalent: 270.00,
-    status: 'rejected',
-    rejection_reason: 'Referencia no encontrada o monto no coincide con la blockchain',
-    verified_by: 'Auditor Fiscal',
-    verified_at: '2026-10-13T11:15:00Z',
-    payment_date: '2026-10-13',
-    created_at: '2026-10-13T10:00:00Z',
-    notes: 'El hash no aparece reflejado en Binance Pay Merchant'
-  }
-];
+let mockPaymentReports: PaymentReportItem[] = [];
 
 export const api = {
 
@@ -1049,13 +644,22 @@ export const api = {
 
   // 1. Dashboard
   async getDashboardMetrics(): Promise<DashboardMetrics> {
+    try {
+      const res = await fetch('/api/v1/dashboard/metrics');
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // offline fallback
+    }
+    const totalSales = mockCashRegisters.reduce((acc, r) => acc + (r.today_sales_total || 0), 0);
     return {
-      total_sales: 12480.50,
-      gross_income: 15200.00,
-      avg_margin: 28.4,
-      transaction_count: 342,
-      sales_change_pct: 12.5,
-      transactions_change_pct: 8.2
+      total_sales: totalSales,
+      gross_income: totalSales,
+      avg_margin: 0,
+      transaction_count: 0,
+      sales_change_pct: 0,
+      transactions_change_pct: 0
     };
   },
 
@@ -1205,6 +809,93 @@ export const api = {
     return mockCashRegisters.find(r => r.id === id) || (mockCashRegisters[0] as CashRegister);
   },
 
+  // Flujo de Vinculación de Personal (Almacenista, Gerente, Contador) con Código de 6 caracteres y QR
+  async requestStaffPairing(payload: { user_id?: string; email?: string; full_name?: string; role: Role; pairing_code?: string }): Promise<{ pairing_code: string; expires_in_seconds: number; qr_payload: string }> {
+    try {
+      const res = await fetch('/api/v1/staff/request-pairing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+    
+    // Offline / fallback
+    const code = payload.pairing_code || `XM-${Math.floor(100 + Math.random() * 900)}`;
+    return {
+      pairing_code: code,
+      expires_in_seconds: 900,
+      qr_payload: `xion://pair-staff?code=${code}&role=${payload.role}`
+    };
+  },
+
+  async getStaffPairingStatus(pairingCode: string): Promise<{ status: 'PENDING' | 'APPROVED'; role?: Role; branch_id?: string; branch_name?: string }> {
+    try {
+      const res = await fetch(`/api/v1/staff/pairing-status/${pairingCode.toUpperCase().trim()}`);
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+
+    const cached = localStorage.getItem(`xion_staff_paired_${pairingCode.toUpperCase().trim()}`);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+    return { status: 'PENDING' };
+  },
+
+  async confirmStaffPairing(payload: { pairing_code: string; branch_id?: string; role: Role; user_id?: string }): Promise<{ status: string; message: string; role: Role; branch_id: string; branch_name: string; onboarding_completed: boolean }> {
+    try {
+      const res = await fetch('/api/v1/staff/confirm-pairing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+
+    const branch = mockBranches.find(b => b.id === payload.branch_id) || mockBranches[0];
+    const result = {
+      status: 'APPROVED',
+      message: `Personal vinculado exitosamente como ${payload.role}`,
+      role: payload.role,
+      branch_id: branch.id,
+      branch_name: branch.name,
+      onboarding_completed: true
+    };
+    localStorage.setItem(`xion_staff_paired_${payload.pairing_code.toUpperCase().trim()}`, JSON.stringify(result));
+    return result;
+  },
+
+  async getPendingStaffPairingRequests(): Promise<any[]> {
+    try {
+      const res = await fetch('/api/v1/staff/pending-requests');
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+    return [];
+  },
+
+  async approveStaffPairingRequest(pairingCode: string, branchId?: string): Promise<{ message: string }> {
+    try {
+      const res = await fetch('/api/v1/staff/approve-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairing_code: pairingCode, branch_id: branchId })
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+    return { message: 'Solicitud aprobada y colaborador vinculado' };
+  },
+
+
   // 3. Inventory, Products, Shrinkage & Transfers
   async getCategories(): Promise<CategoryItem[]> {
     try {
@@ -1328,7 +1019,7 @@ export const api = {
       return p;
     });
     const found = mockInventory.find(p => p.id === id || p.product_id === id);
-    return found || (mockInventory[0] as ProductInventory);
+    return found || ({ id, name: productData.name || 'Producto', ...productData } as ProductInventory);
   },
 
   async deleteProduct(id: string): Promise<void> {
@@ -1364,7 +1055,7 @@ export const api = {
       }
       return prod;
     }
-    return mockInventory[0];
+    return { id: dto.product_id, name: 'Producto', current_stock: dto.new_stock || 0 } as ProductInventory;
   },
 
   async registerShrinkage(data: Partial<InventoryShrinkage>): Promise<InventoryShrinkage> {
@@ -1500,7 +1191,7 @@ export const api = {
       // offline fallback
     }
     mockSuppliers = mockSuppliers.map(s => s.id === id ? { ...s, ...data } : s);
-    return mockSuppliers.find(s => s.id === id) || (mockSuppliers[0] as SupplierItem);
+    return mockSuppliers.find(s => s.id === id) || ({ id, name: data.name || 'Proveedor' } as SupplierItem);
   },
 
   async deleteSupplier(id: string): Promise<void> {
@@ -1683,7 +1374,7 @@ export const api = {
       }
       return purchase;
     }
-    return mockPurchases[0];
+    return { id: purchaseId, total_amount_usd: 0 } as PurchaseRecord;
   },
 
 

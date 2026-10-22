@@ -1312,13 +1312,17 @@ async def logout(
 # 1. Dashboard
 @api_router.get("/dashboard/metrics")
 async def get_dashboard_metrics(branch_id: Optional[str] = None):
+    registers = cash_registers_db
+    if branch_id and branch_id != "all":
+        registers = [r for r in registers if r["branch_id"] == branch_id]
+    total_sales = sum(float(r.get("today_sales_total", 0.0)) for r in registers)
     return {
-        "total_sales": 12480.50,
-        "gross_income": 15200.00,
-        "avg_margin": 28.4,
-        "transaction_count": 342,
-        "sales_change_pct": 12.5,
-        "transactions_change_pct": 8.2
+        "total_sales": total_sales,
+        "gross_income": total_sales,
+        "avg_margin": 0.0,
+        "transaction_count": 0,
+        "sales_change_pct": 0.0,
+        "transactions_change_pct": 0.0
     }
 
 # 2. Branches & Cash Registers State & Endpoints
@@ -1326,30 +1330,16 @@ branches_db = [
     {
         "id": "branch-1",
         "business_id": "biz-101",
-        "name": "Sucursal Principal - Centro",
-        "address": "Av. Bolívar, Calle 4 #12-45, Maracaibo",
+        "name": "Sucursal Principal",
+        "address": "Sede Principal",
         "latitude": 10.6417,
         "longitude": -71.6125,
-        "phone": "+58 414-1234567",
-        "manager_user_id": "usr-m1",
-        "manager_name": "Alejandro Colina",
-        "active_cash_registers_count": 2,
+        "phone": "+58 414-0000000",
+        "manager_user_id": "usr-admin-01",
+        "manager_name": "Administrador",
+        "active_cash_registers_count": 1,
         "is_active": True,
-        "created_at": datetime(2026, 1, 15, 10, 0, 0)
-    },
-    {
-        "id": "branch-2",
-        "business_id": "biz-101",
-        "name": "Sucursal Norte - CC Lago Mall",
-        "address": "Av. 2 El Milagro, Nivel PB, Local 12, Maracaibo",
-        "latitude": 10.6698,
-        "longitude": -71.5989,
-        "phone": "+58 412-7654321",
-        "manager_user_id": "usr-m2",
-        "manager_name": "María Silva",
-        "active_cash_registers_count": 2,
-        "is_active": True,
-        "created_at": datetime(2026, 3, 20, 14, 30, 0)
+        "created_at": datetime.utcnow()
     }
 ]
 
@@ -1357,58 +1347,16 @@ cash_registers_db = [
     {
         "id": "reg-01",
         "branch_id": "branch-1",
-        "branch_name": "Sucursal Principal - Centro",
-        "name": "Caja 01 - Principal",
-        "hardware_uuid": "HW-POS-01-A92B",
-        "status": "OPEN",
-        "is_active": True,
-        "current_operator": "Carlos Mendoza",
-        "today_sales_total": 450.00,
-        "allowed_user_ids": ["usr-admin-01", "usr-cashier-01"],
-        "payment_methods": ["CASH_USD", "CASH_BS", "PAGO_MOVIL", "DEBIT_CARD", "ZELLE"],
-        "created_at": datetime(2026, 1, 16, 8, 0, 0)
-    },
-    {
-        "id": "reg-02",
-        "branch_id": "branch-1",
-        "branch_name": "Sucursal Principal - Centro",
-        "name": "Caja 02 - Pasillo Rápido",
-        "hardware_uuid": "HW-POS-02-C77D",
+        "branch_name": "Sucursal Principal",
+        "name": "Caja 01",
+        "hardware_uuid": "HW-POS-01",
         "status": "CLOSED",
         "is_active": True,
         "current_operator": None,
         "today_sales_total": 0.00,
-        "allowed_user_ids": ["usr-admin-01", "usr-cashier-01"],
+        "allowed_user_ids": ["usr-admin-01"],
         "payment_methods": ["CASH_USD", "CASH_BS", "PAGO_MOVIL", "DEBIT_CARD"],
-        "created_at": datetime(2026, 1, 16, 8, 30, 0)
-    },
-    {
-        "id": "reg-03",
-        "branch_id": "branch-2",
-        "branch_name": "Sucursal Norte - CC Lago Mall",
-        "name": "Caja 01 - Lago Mall",
-        "hardware_uuid": "HW-POS-03-F11E",
-        "status": "OPEN",
-        "is_active": True,
-        "current_operator": "Pedro Ramos",
-        "today_sales_total": 290.50,
-        "allowed_user_ids": ["usr-branch_manager-01", "usr-cashier-01"],
-        "payment_methods": ["CASH_USD", "CASH_BS", "PAGO_MOVIL", "DEBIT_CARD", "ZELLE"],
-        "created_at": datetime(2026, 3, 21, 9, 0, 0)
-    },
-    {
-        "id": "reg-04",
-        "branch_id": "branch-2",
-        "branch_name": "Sucursal Norte - CC Lago Mall",
-        "name": "Caja 02 - Express",
-        "hardware_uuid": "HW-POS-04-K88M",
-        "status": "CLOSED",
-        "is_active": True,
-        "current_operator": None,
-        "today_sales_total": 0.00,
-        "allowed_user_ids": ["usr-branch_manager-01"],
-        "payment_methods": ["CASH_USD", "CASH_BS", "PAGO_MOVIL"],
-        "created_at": datetime(2026, 3, 21, 9, 30, 0)
+        "created_at": datetime.utcnow()
     }
 ]
 
@@ -1536,163 +1484,18 @@ async def toggle_cash_register_status(register_id: str, operator_name: Optional[
 
 
 # 3. Inventory State & Endpoints
-inventory_db = [
-    {
-        "id": "inv-1",
-        "product_id": "p-1",
-        "barcode": "7591234567890",
-        "sku": "PROD-HAR-01",
-        "name": "Harina Pan 1kg",
-        "description": "Harina de maíz precocida tradicional",
-        "category": "Víveres",
-        "cost_price": 0.95,
-        "sale_price": 1.30,
-        "wholesale_price": 1.15,
-        "package_quantity": 20,
-        "product_type": "physical",
-        "tax_type": "none",
-        "unit_measure": "UND",
-        "current_stock": 150.0,
-        "min_stock_alert": 20.0,
-        "image_url": "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=300",
-        "branch_id": "branch-1",
-        "branch_name": "Sucursal Principal - Centro",
-        "combo_items": []
-    },
-    {
-        "id": "inv-2",
-        "product_id": "p-2",
-        "barcode": "7599876543210",
-        "sku": "PROD-ACE-02",
-        "name": "Aceite de Maíz 1L",
-        "description": "Aceite vegetal comestible",
-        "category": "Víveres",
-        "cost_price": 2.10,
-        "sale_price": 2.90,
-        "wholesale_price": 2.60,
-        "package_quantity": 12,
-        "product_type": "physical",
-        "tax_type": "vat",
-        "unit_measure": "UND",
-        "current_stock": 8.0,
-        "min_stock_alert": 15.0,
-        "image_url": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=300",
-        "branch_id": "branch-1",
-        "branch_name": "Sucursal Principal - Centro",
-        "combo_items": []
-    },
-    {
-        "id": "inv-3",
-        "product_id": "p-3",
-        "barcode": "7594567890123",
-        "sku": "PROD-AZU-03",
-        "name": "Azúcar Refinada 1kg",
-        "description": "Azúcar blanca refinada de alta pureza",
-        "category": "Víveres",
-        "cost_price": 0.85,
-        "sale_price": 1.15,
-        "wholesale_price": 1.05,
-        "package_quantity": 25,
-        "product_type": "physical",
-        "tax_type": "none",
-        "unit_measure": "UND",
-        "current_stock": 45.0,
-        "min_stock_alert": 10.0,
-        "image_url": "",
-        "branch_id": "branch-1",
-        "branch_name": "Sucursal Principal - Centro",
-        "combo_items": []
-    },
-    {
-        "id": "inv-4",
-        "product_id": "p-4",
-        "barcode": "7597890123456",
-        "sku": "PROD-ARR-04",
-        "name": "Arroz Blanco Tradicional 1kg",
-        "description": "Arroz tipo I grano entero",
-        "category": "Víveres",
-        "cost_price": 1.05,
-        "sale_price": 1.45,
-        "wholesale_price": 1.30,
-        "package_quantity": 24,
-        "product_type": "physical",
-        "tax_type": "none",
-        "unit_measure": "UND",
-        "current_stock": 2.0,
-        "min_stock_alert": 15.0,
-        "image_url": "",
-        "branch_id": "branch-1",
-        "branch_name": "Sucursal Principal - Centro",
-        "combo_items": []
-    },
-    {
-        "id": "inv-5",
-        "product_id": "p-5",
-        "barcode": "7590001112223",
-        "sku": "CMB-DESAYUNO-01",
-        "name": "Combo Desayuno Criollo (Harina + Aceite + Azúcar)",
-        "description": "Pack especial ahorro familiar",
-        "category": "Combos",
-        "cost_price": 3.90,
-        "sale_price": 4.99,
-        "wholesale_price": 4.70,
-        "package_quantity": 1,
-        "product_type": "virtual",
-        "tax_type": "none",
-        "unit_measure": "UND",
-        "current_stock": 10.0,
-        "min_stock_alert": 5.0,
-        "image_url": "",
-        "branch_id": "branch-1",
-        "branch_name": "Sucursal Principal - Centro",
-        "combo_items": [
-            {"product_id": "p-1", "product_name": "Harina Pan 1kg", "quantity": 1},
-            {"product_id": "p-2", "product_name": "Aceite de Maíz 1L", "quantity": 1},
-            {"product_id": "p-3", "product_name": "Azúcar Refinada 1kg", "quantity": 1}
-        ]
-    }
-]
+inventory_db: List[dict] = []
 
-transfers_db = [
-    {
-        "id": "tr-001",
-        "transfer_code": "TR-102",
-        "origin_branch_id": "branch-1",
-        "origin_branch_name": "Sucursal Principal - Centro",
-        "destination_branch_id": "branch-2",
-        "destination_branch_name": "Sucursal Norte - CC Lago Mall",
-        "product_id": "p-1",
-        "product_name": "Harina Pan 1kg",
-        "quantity": 20,
-        "status": "COMPLETED",
-        "notes": "Reposición semanal de stock alta demanda",
-        "created_at": "2026-10-08 10:15:00"
-    }
-]
+transfers_db: List[dict] = []
 
-categories_db = [
+categories_db: List[dict] = [
     {"id": "cat-1", "name": "Víveres", "parent_id": None, "full_path": "Víveres", "is_active": True},
-    {"id": "cat-1-1", "name": "Harinas y Granos", "parent_id": "cat-1", "full_path": "Víveres > Harinas y Granos", "is_active": True},
-    {"id": "cat-1-2", "name": "Aceites y Grasas", "parent_id": "cat-1", "full_path": "Víveres > Aceites y Grasas", "is_active": True},
     {"id": "cat-2", "name": "Bebidas", "parent_id": None, "full_path": "Bebidas", "is_active": True},
-    {"id": "cat-2-1", "name": "Refrescos y Jugos", "parent_id": "cat-2", "full_path": "Bebidas > Refrescos y Jugos", "is_active": True},
-    {"id": "cat-3", "name": "Lácteos y Huevos", "parent_id": None, "full_path": "Lácteos y Huevos", "is_active": True},
-    {"id": "cat-4", "name": "Limpieza y Hogar", "parent_id": None, "full_path": "Limpieza y Hogar", "is_active": True},
-    {"id": "cat-5", "name": "Combos y Promociones", "parent_id": None, "full_path": "Combos y Promociones", "is_active": True}
+    {"id": "cat-3", "name": "Limpieza y Hogar", "parent_id": None, "full_path": "Limpieza y Hogar", "is_active": True},
+    {"id": "cat-4", "name": "Combos y Promociones", "parent_id": None, "full_path": "Combos y Promociones", "is_active": True}
 ]
 
-shrinkage_db = [
-    {
-        "id": "shk-001",
-        "product_id": "p-1",
-        "product_name": "Harina Pan 1kg",
-        "branch_id": "branch-1",
-        "quantity": 2.0,
-        "reason": "Dañado/Vencido",
-        "justification": "Empaque roto por humedad en anaquel",
-        "date": "2026-10-14 11:30"
-    }
-]
+shrinkage_db: List[dict] = []
 
 @api_router.get("/inventory/categories")
 async def list_categories():
@@ -1853,114 +1656,9 @@ async def create_transfer(payload: StockTransferCreate):
     return new_tr
 
 # 4. Suppliers & Purchases State & Endpoints
-suppliers_db = [
-    {
-        "id": "sup-001",
-        "name": "Distribuidora Alimentos Polar C.A.",
-        "rif": "J-00041372-9",
-        "email": "pedidos@polar.com",
-        "phone": "+58 212-2023111",
-        "address": "Los Cortijos de Lourdes, Edif. Fundación Polar, Caracas",
-        "category": "Alimentos y Bebidas",
-        "payment_terms_days": 15,
-        "current_balance_usd": 0.0,
-        "is_active": True,
-        "created_at": "2026-01-10"
-    },
-    {
-        "id": "sup-002",
-        "name": "Comercializadora Cargill Venezuela S.R.L.",
-        "rif": "J-30591823-1",
-        "email": "atencion@cargill.com.ve",
-        "phone": "+58 241-8742000",
-        "address": "Zona Industrial Castillito, Valencia, Carabobo",
-        "category": "Granos y Aceites",
-        "payment_terms_days": 30,
-        "current_balance_usd": 350.50,
-        "is_active": True,
-        "created_at": "2026-02-05"
-    },
-    {
-        "id": "sup-003",
-        "name": "Monaca - Molinos Nacionales C.A.",
-        "rif": "J-00015940-7",
-        "email": "ventas@monaca.com.ve",
-        "phone": "+58 212-9014000",
-        "address": "Av. Principal Los Ruices, Caracas",
-        "category": "Harinas y Derivados",
-        "payment_terms_days": 21,
-        "current_balance_usd": 0.0,
-        "is_active": True,
-        "created_at": "2026-03-12"
-    }
-]
+suppliers_db: List[dict] = []
 
-purchases_db = [
-    {
-        "id": "pur-001",
-        "supplier_id": "sup-001",
-        "supplier_name": "Distribuidora Alimentos Polar C.A.",
-        "supplier_rif": "J-00041372-9",
-        "invoice_number": "FAC-00892",
-        "branch_id": "branch-1",
-        "branch_name": "Sucursal Principal - Centro",
-        "date": "2026-10-06",
-        "total_amount_usd": 1420.00,
-        "total_amount_bs": 53250.00,
-        "exchange_rate": 37.50,
-        "payment_type": "cash",
-        "payment_status": "paid",
-        "paid_amount_usd": 1420.00,
-        "pending_amount_usd": 0.0,
-        "credit_days": 0,
-        "notes": "Despacho directo en depósito central",
-        "items_count": 8,
-        "items": [
-            {
-                "product_id": "p-1",
-                "product_name": "Harina Pan 1kg",
-                "product_sku": "PROD-HAR-01",
-                "quantity": 100,
-                "lot_number": "LOT-2026-A1",
-                "cost_usd": 0.95,
-                "cost_bs": 35.62,
-                "total_usd": 95.00
-            }
-        ]
-    },
-    {
-        "id": "pur-002",
-        "supplier_id": "sup-002",
-        "supplier_name": "Comercializadora Cargill Venezuela S.R.L.",
-        "supplier_rif": "J-30591823-1",
-        "invoice_number": "FAC-99120",
-        "branch_id": "branch-2",
-        "branch_name": "Sucursal Norte - CC Lago Mall",
-        "date": "2026-10-07",
-        "total_amount_usd": 850.50,
-        "total_amount_bs": 31893.75,
-        "exchange_rate": 37.50,
-        "payment_type": "credit",
-        "payment_status": "partial",
-        "paid_amount_usd": 500.00,
-        "pending_amount_usd": 350.50,
-        "credit_days": 30,
-        "notes": "Crédito a 30 días, anticipo 500$",
-        "items_count": 4,
-        "items": [
-            {
-                "product_id": "p-2",
-                "product_name": "Aceite de Maíz 1L",
-                "product_sku": "PROD-ACE-02",
-                "quantity": 50,
-                "lot_number": "LOT-CG-99",
-                "cost_usd": 2.10,
-                "cost_bs": 78.75,
-                "total_usd": 105.00
-            }
-        ]
-    }
-]
+purchases_db: List[dict] = []
 
 @api_router.get("/suppliers")
 async def list_suppliers():
@@ -2007,19 +1705,7 @@ async def list_purchases(supplier_id: Optional[str] = None, branch_id: Optional[
         res = [p for p in res if p.get("branch_id") == branch_id]
     return res
 
-supplier_ledger_db = [
-    {
-        "id": "ledg-001",
-        "supplier_id": "sup-002",
-        "purchase_id": "pur-002",
-        "tx_type": "CHARGE",
-        "amount_usd": 350.50,
-        "exchange_rate": 37.5,
-        "reference": "FAC-99120",
-        "notes": "Compra a crédito Factura FAC-99120",
-        "created_at": datetime(2026, 10, 7, 10, 0, 0)
-    }
-]
+supplier_ledger_db: List[dict] = []
 
 @api_router.get("/suppliers/{supplier_id}/ledger")
 async def get_supplier_ledger(supplier_id: str):
@@ -2167,6 +1853,138 @@ async def user_approval(user_id: str = Body(...), status_val: str = Body(...)):
         "approval_status": status_val,
         "message": "Estado de aprobación actualizado correctamente"
     }
+
+# Staff / Employee Pairing DB & Endpoints (Misma lógica de vinculación que las cajas)
+staff_pairings_db = [
+    {
+        "pairing_code": "XM-792",
+        "user_id": "usr-staff-demo",
+        "email": "almacen.demo@xion.com",
+        "full_name": "Elena Blanco",
+        "role": "SUPERVISOR",
+        "branch_id": "branch-1",
+        "branch_name": "Sucursal Principal - Centro",
+        "status": "APPROVED",
+        "created_at": datetime.utcnow().isoformat(),
+        "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+    }
+]
+
+@api_router.post("/staff/request-pairing")
+async def request_staff_pairing(payload: dict = Body(...)):
+    """
+    Genera un código de 6 caracteres y QR para vincular Almacenista, Gerente o Contador.
+    """
+    import random
+    code = payload.get("pairing_code") or f"XM-{random.randint(100, 999)}"
+    code = code.upper().strip()
+    role = payload.get("role", "SUPERVISOR")
+    req = {
+        "pairing_code": code,
+        "user_id": payload.get("user_id"),
+        "email": payload.get("email"),
+        "full_name": payload.get("full_name") or "Colaborador Xion",
+        "role": role,
+        "branch_id": payload.get("branch_id", "branch-1"),
+        "branch_name": "Sucursal Principal - Centro",
+        "status": "PENDING",
+        "created_at": datetime.utcnow().isoformat(),
+        "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+    }
+    global staff_pairings_db
+    staff_pairings_db = [s for s in staff_pairings_db if s["pairing_code"] != code]
+    staff_pairings_db.append(req)
+    return {
+        "pairing_code": code,
+        "expires_in_seconds": 900,
+        "qr_payload": f"xion://pair-staff?code={code}&role={role}",
+        "request": req
+    }
+
+@api_router.get("/staff/pairing-status/{pairing_code}")
+async def get_staff_pairing_status(pairing_code: str):
+    """
+    Consulta el estado de aprobación del código de vinculación de personal.
+    """
+    code = pairing_code.upper().strip()
+    for s in staff_pairings_db:
+        if s["pairing_code"].upper() == code:
+            return s
+    return {"status": "PENDING", "pairing_code": code}
+
+@api_router.post("/staff/confirm-pairing")
+async def confirm_staff_pairing(payload: dict = Body(...)):
+    """
+    Confirma e introduce al personal no-propietario mediante código ingresado o escaneado.
+    """
+    code = (payload.get("pairing_code") or "").upper().strip()
+    role = payload.get("role", "SUPERVISOR")
+    branch_id = payload.get("branch_id") or "branch-1"
+    branch_name = "Sucursal Principal - Centro"
+    for b in branches_db:
+        if b["id"] == branch_id:
+            branch_name = b["name"]
+            break
+
+    found = False
+    for s in staff_pairings_db:
+        if s["pairing_code"].upper() == code:
+            s["status"] = "APPROVED"
+            s["role"] = role
+            s["branch_id"] = branch_id
+            s["branch_name"] = branch_name
+            found = True
+            break
+
+    if not found:
+        staff_pairings_db.append({
+            "pairing_code": code,
+            "role": role,
+            "branch_id": branch_id,
+            "branch_name": branch_name,
+            "status": "APPROVED",
+            "created_at": datetime.utcnow().isoformat(),
+            "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+        })
+
+    return {
+        "status": "APPROVED",
+        "message": f"Personal vinculado exitosamente con rol {role}",
+        "role": role,
+        "branch_id": branch_id,
+        "branch_name": branch_name,
+        "onboarding_completed": True
+    }
+
+@api_router.get("/staff/pending-requests")
+async def list_pending_staff_requests():
+    """
+    Lista de solicitudes pendientes de personal para el panel del Propietario.
+    """
+    return [s for s in staff_pairings_db if s.get("status") == "PENDING"]
+
+@api_router.post("/staff/approve-request")
+async def approve_staff_request(payload: dict = Body(...)):
+    """
+    El propietario aprueba una solicitud de vinculación de personal.
+    """
+    code = (payload.get("pairing_code") or "").upper().strip()
+    branch_id = payload.get("branch_id") or "branch-1"
+    branch_name = "Sucursal Principal - Centro"
+    for b in branches_db:
+        if b["id"] == branch_id:
+            branch_name = b["name"]
+            break
+
+    for s in staff_pairings_db:
+        if s["pairing_code"].upper() == code:
+            s["status"] = "APPROVED"
+            s["branch_id"] = branch_id
+            s["branch_name"] = branch_name
+            return {"message": "Solicitud aprobada y personal vinculado", "request": s}
+
+    return {"message": "Solicitud no encontrada"}
+
 
 # 6. Audit & Cash Sessions
 @api_router.get("/audit/logs")
@@ -2343,116 +2161,7 @@ COMPANY_DESTINATION_ACCOUNTS = [
     }
 ]
 
-payment_reports_db: List[dict] = [
-    {
-        "id": "rep-001",
-        "business_id": "biz-101",
-        "order_id": "FAC-2026-089",
-        "subscription_id": None,
-        "concept": "Pago de Factura FAC-2026-089",
-        "payment_method": "pago_movil",
-        "origin_bank": "Banco de Venezuela",
-        "dest_bank": "Banesco (Pago Móvil)",
-        "payer_name": "Carlos Eduardo Mendoza",
-        "payer_id_or_phone": "V-18456123 / 0414-9988112",
-        "payer_email": "carlos.m@gmail.com",
-        "reference_number": "849201",
-        "amount_paid": 1875.00,
-        "currency": "VES",
-        "exchange_rate": 37.5000,
-        "amount_base_equivalent": 50.00,
-        "receipt_url": "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600",
-        "status": "pending",
-        "rejection_reason": None,
-        "notes": "Transferencia de Pago Móvil efectuada a las 10:15 am",
-        "verified_by": None,
-        "verified_by_user_id": None,
-        "verified_at": None,
-        "payment_date": date(2026, 10, 15),
-        "created_at": datetime(2026, 10, 15, 10, 20, 0)
-    },
-    {
-        "id": "rep-002",
-        "business_id": "biz-101",
-        "order_id": "SUB-2026-OCT",
-        "subscription_id": "sub-101",
-        "concept": "Suscripción Plan Comercio + 2 Cajas",
-        "payment_method": "zelle",
-        "origin_bank": "Chase Bank",
-        "dest_bank": "Zelle (pagos@xion.com)",
-        "payer_name": "Inversiones Maracaibo Corp",
-        "payer_id_or_phone": None,
-        "payer_email": "admin@inversionesmaracaibo.com",
-        "reference_number": "ZL-9940128",
-        "amount_paid": 70.00,
-        "currency": "USD",
-        "exchange_rate": 37.5000,
-        "amount_base_equivalent": 70.00,
-        "receipt_url": "https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=600",
-        "status": "approved",
-        "rejection_reason": None,
-        "notes": "Confirmado en portal bancario Zelle",
-        "verified_by": "Juan Delgado (Dueño)",
-        "verified_by_user_id": "usr-owner-01",
-        "verified_at": datetime(2026, 10, 15, 9, 30, 0),
-        "payment_date": date(2026, 10, 15),
-        "created_at": datetime(2026, 10, 15, 9, 0, 0)
-    },
-    {
-        "id": "rep-003",
-        "business_id": "biz-101",
-        "order_id": "FAC-2026-081",
-        "subscription_id": None,
-        "concept": "Abono Parcial Pedido Mayorista",
-        "payment_method": "binance_pay",
-        "origin_bank": "Binance App",
-        "dest_bank": "Binance Pay ID (284910294)",
-        "payer_name": "Luis Alberto Morales",
-        "payer_id_or_phone": "PayID: 10982344",
-        "payer_email": "morales.crypto@yahoo.com",
-        "reference_number": "BN-2098410298",
-        "amount_paid": 120.00,
-        "currency": "USDT",
-        "exchange_rate": 37.5000,
-        "amount_base_equivalent": 120.00,
-        "receipt_url": "https://images.unsplash.com/photo-1621416894569-0f39ed31d247?w=600",
-        "status": "approved",
-        "rejection_reason": None,
-        "notes": "Aprobado por coincidencia inmediata de Order ID",
-        "verified_by": "Carlos Mendoza (Administrador)",
-        "verified_by_user_id": "usr-admin-01",
-        "verified_at": datetime(2026, 10, 14, 18, 0, 0),
-        "payment_date": date(2026, 10, 14),
-        "created_at": datetime(2026, 10, 14, 17, 45, 0)
-    },
-    {
-        "id": "rep-004",
-        "business_id": "biz-101",
-        "order_id": "FAC-2026-077",
-        "subscription_id": None,
-        "concept": "Compra Productos Alimentos",
-        "payment_method": "pago_movil",
-        "origin_bank": "Banco Mercantil",
-        "dest_bank": "Banesco (Pago Móvil)",
-        "payer_name": "Gabriela Rivas",
-        "payer_id_or_phone": "V-21334901 / 0412-5556677",
-        "payer_email": "gabriela.r@gmail.com",
-        "reference_number": "112233",
-        "amount_paid": 950.00,
-        "currency": "VES",
-        "exchange_rate": 37.5000,
-        "amount_base_equivalent": 25.33,
-        "receipt_url": "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600",
-        "status": "rejected",
-        "rejection_reason": "Referencia no encontrada en la conciliación bancaria",
-        "notes": "El banco emisor no arrojó crédito en el extracto del día",
-        "verified_by": "Carlos Mendoza (Administrador)",
-        "verified_by_user_id": "usr-admin-01",
-        "verified_at": datetime(2026, 10, 14, 11, 20, 0),
-        "payment_date": date(2026, 10, 14),
-        "created_at": datetime(2026, 10, 14, 10, 0, 0)
-    }
-]
+payment_reports_db: List[dict] = []
 
 @api_router.get("/payment-reports/banks")
 async def get_venezuelan_banks():
