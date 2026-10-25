@@ -570,8 +570,38 @@ export const api = {
         ...(token ? { 'Authorization': `Bearer ${token}` } : {})
       }
     });
-    if (!res.ok) throw new Error('Error al obtener perfil y preferencias');
+    if (!res.ok) {
+      const err: any = new Error('Error al obtener perfil y preferencias');
+      err.status = res.status;
+      throw err;
+    }
     return await res.json();
+  },
+
+  isTokenExpired(token?: string | null): boolean {
+    if (!token) return true;
+    try {
+      const parts = token.split('.');
+      if (parts.length !== 3) {
+        // Token dev sin estructura JWT estándar
+        return false;
+      }
+      const base64Url = parts[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(
+        atob(base64)
+          .split('')
+          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+      const decoded = JSON.parse(jsonPayload);
+      if (decoded.exp) {
+        return Date.now() >= decoded.exp * 1000;
+      }
+      return false;
+    } catch {
+      return false;
+    }
   },
 
   async getUserPreferences(): Promise<UserPreference> {
@@ -853,22 +883,28 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      if (res.ok) {
-        return await res.json();
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const err: any = new Error(errData.detail || 'Error al procesar el código de vinculación');
+        err.status = res.status;
+        throw err;
       }
-    } catch {}
-
-    const branch = mockBranches.find(b => b.id === payload.branch_id) || mockBranches[0];
-    const result = {
-      status: 'APPROVED',
-      message: `Personal vinculado exitosamente como ${payload.role}`,
-      role: payload.role,
-      branch_id: branch.id,
-      branch_name: branch.name,
-      onboarding_completed: true
-    };
-    localStorage.setItem(`xion_staff_paired_${payload.pairing_code.toUpperCase().trim()}`, JSON.stringify(result));
-    return result;
+      return await res.json();
+    } catch (e: any) {
+      if (e?.status === 429 || e?.message?.includes('Demasiados')) {
+        throw e;
+      }
+      // Offline fallback: registrar solicitud en PENDING (requiere aprobación del dueño)
+      const branch = mockBranches.find(b => b.id === payload.branch_id) || mockBranches[0];
+      return {
+        status: 'PENDING',
+        message: 'Código recibido. Esperando aprobación del Propietario desde el panel de Usuarios.',
+        role: payload.role,
+        branch_id: branch.id,
+        branch_name: branch.name,
+        onboarding_completed: false
+      };
+    }
   },
 
   async getPendingStaffPairingRequests(): Promise<any[]> {

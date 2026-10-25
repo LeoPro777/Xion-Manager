@@ -18,18 +18,74 @@ import { User } from './types';
 import { api, applySystemPreferences } from './services/api';
 
 export const App: React.FC = () => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  // 1. Restaurar sesión de forma síncrona desde localStorage para evitar parpadeos y redirección al Login
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    try {
+      const token = localStorage.getItem('xion_access_token');
+      const savedUser = localStorage.getItem('xion_user');
+      if (token && savedUser) {
+        if (api.isTokenExpired(token)) {
+          api.logout();
+          return null;
+        }
+        return JSON.parse(savedUser);
+      }
+    } catch (e) {
+      console.error('Error al restaurar sesión de usuario:', e);
+    }
+    return null;
+  });
+
+  // 2. Restaurar última pestaña activa
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    return localStorage.getItem('xion_active_tab') || 'dashboard';
+  });
+
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
+    localStorage.setItem('xion_active_tab', tab);
+  };
+
+  const handleUpdateUser = (user: User | null) => {
+    setCurrentUser(user);
+    if (user) {
+      localStorage.setItem('xion_user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('xion_user');
+    }
+  };
+
+  const handleLogout = () => {
+    api.logout();
+    setCurrentUser(null);
+  };
 
   useEffect(() => {
-    if (import.meta.env.DEV) {
-      api.loginBypass('OWNER').then(setCurrentUser);
+    const token = localStorage.getItem('xion_access_token');
+    if (token) {
+      if (api.isTokenExpired(token)) {
+        handleLogout();
+        return;
+      }
+      // Revalidar sesión en segundo plano sin interrumpir al usuario
+      api.getUserProfile()
+        .then((profile) => {
+          if (profile?.user) {
+            handleUpdateUser(profile.user);
+          }
+        })
+        .catch((err) => {
+          if (err?.status === 401 || err?.message?.includes('401')) {
+            handleLogout();
+          }
+        });
     }
+
     api.getPreferences().then(applySystemPreferences);
   }, []);
 
   if (!currentUser) {
-    return <LoginPage onLoginSuccess={setCurrentUser} />;
+    return <LoginPage onLoginSuccess={handleUpdateUser} />;
   }
 
   const needsOnboarding = (
@@ -73,10 +129,10 @@ export const App: React.FC = () => {
     <>
       <DashboardLayout 
         activeTab={activeTab} 
-        setActiveTab={setActiveTab}
+        setActiveTab={handleTabChange}
         currentUser={currentUser}
-        setCurrentUser={setCurrentUser}
-        onLogout={() => setCurrentUser(null)}
+        setCurrentUser={handleUpdateUser}
+        onLogout={handleLogout}
       >
         {renderContent()}
       </DashboardLayout>
@@ -85,7 +141,7 @@ export const App: React.FC = () => {
         <OnboardingWizardModal
           currentUser={currentUser}
           onCompleted={(updatedUser) => {
-            setCurrentUser(updatedUser);
+            handleUpdateUser(updatedUser);
           }}
         />
       )}

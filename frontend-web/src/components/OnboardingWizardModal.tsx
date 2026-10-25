@@ -43,6 +43,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const [pairingSecondsLeft, setPairingSecondsLeft] = useState<number>(900); // 15 minutos
   const [isCopiedCode, setIsCopiedCode] = useState(false);
   const [manualPairingCode, setManualPairingCode] = useState('');
+  const [submittedManualCode, setSubmittedManualCode] = useState<string | null>(null);
   const [selectedBranchId, setSelectedBranchId] = useState('branch-1');
   const [branchesList, setBranchesList] = useState<Branch[]>([]);
   const [isPairingStaff, setIsPairingStaff] = useState(false);
@@ -170,12 +171,13 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     return () => clearInterval(timer);
   }, [step, pairingSecondsLeft]);
 
-  // Polling de aprobación en vivo si el propietario autoriza remotamente
+  // Polling de aprobación en vivo si el propietario autoriza remotamente (sea por QR o código ingresado)
   useEffect(() => {
-    if (step !== 'STAFF_PAIRING' || !staffPairingCode || pairingSecondsLeft <= 0) return;
+    const codeToPoll = submittedManualCode || staffPairingCode;
+    if (step !== 'STAFF_PAIRING' || !codeToPoll || pairingSecondsLeft <= 0) return;
     const interval = setInterval(async () => {
       try {
-        const res = await api.getStaffPairingStatus(staffPairingCode);
+        const res = await api.getStaffPairingStatus(codeToPoll);
         if (res.status === 'APPROVED') {
           handleExecuteStaffConnection(
             res.branch_id || selectedBranchId,
@@ -184,9 +186,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
           );
         }
       } catch {}
-    }, 4000);
+    }, 3500);
     return () => clearInterval(interval);
-  }, [step, staffPairingCode, pairingSecondsLeft]);
+  }, [step, staffPairingCode, submittedManualCode, pairingSecondsLeft]);
 
   const handleCopyCode = () => {
     if (!staffPairingCode) return;
@@ -196,7 +198,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   };
 
   const handleExecuteStaffConnection = (branchId: string, branchName: string, role: Role) => {
-    setPairingSuccessMsg(`¡Vinculación autorizada! Ingresando como ${getRoleLabel(role)}...`);
+    setPairingSuccessMsg(`¡Vinculación aprobada por el Propietario! Ingresando como ${getRoleLabel(role)}...`);
     setIsPairingStaff(true);
 
     setTimeout(() => {
@@ -220,30 +222,41 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     if (!manualPairingCode.trim()) return;
     setIsPairingStaff(true);
     setErrorMsg(null);
+    setPairingSuccessMsg(null);
+
+    const cleanCode = manualPairingCode.trim().toUpperCase();
 
     try {
-      const confirmed = await api.confirmStaffPairing({
-        pairing_code: manualPairingCode.trim().toUpperCase(),
+      const res = await api.confirmStaffPairing({
+        pairing_code: cleanCode,
         branch_id: selectedBranchId,
         role: selectedStaffRole,
         user_id: currentUser.id
       });
 
-      handleExecuteStaffConnection(
-        confirmed.branch_id,
-        confirmed.branch_name,
-        confirmed.role
-      );
+      if (res.status === 'APPROVED') {
+        handleExecuteStaffConnection(
+          res.branch_id,
+          res.branch_name,
+          res.role
+        );
+      } else {
+        // En estado PENDING: Espera explícita de autorización del Propietario
+        setIsPairingStaff(false);
+        setSubmittedManualCode(cleanCode);
+        setPairingSuccessMsg(res.message || 'Solicitud enviada. Esperando que el Propietario autorice el acceso desde Usuarios.');
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Código de vinculación inválido o expirado.');
       setIsPairingStaff(false);
     }
   };
 
-  const handleSimulateOwnerApproval = async () => {
+  const handleSimulateOwnerApproval = async (codeToApprove?: string) => {
     setIsPairingStaff(true);
+    const targetCode = codeToApprove || submittedManualCode || staffPairingCode;
     const branch = branchesList.find(b => b.id === selectedBranchId) || branchesList[0] || { id: 'branch-1', name: 'Sucursal Principal - Centro' };
-    await api.approveStaffPairingRequest(staffPairingCode, branch.id);
+    await api.approveStaffPairingRequest(targetCode, branch.id);
     handleExecuteStaffConnection(branch.id, branch.name, selectedStaffRole);
   };
 
@@ -719,7 +732,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                     <button
                       type="button"
                       disabled={isPairingStaff}
-                      onClick={handleSimulateOwnerApproval}
+                      onClick={() => handleSimulateOwnerApproval()}
                       className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center gap-2 transition-all active:scale-95"
                     >
                       <Zap className="w-3.5 h-3.5 fill-white" />
@@ -732,70 +745,114 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
               {/* MODO 2: Introducir Código Manual */}
               {staffPairingTab === 'ENTER_CODE' && (
-                <form onSubmit={handleManualPairSubmit} className="bg-slate-950/70 p-5 sm:p-6 rounded-3xl border border-slate-800/80 space-y-4">
-                  <div className="space-y-1">
-                    <h4 className="text-sm sm:text-base font-extrabold text-white">
-                      Ingresa el Código Proporcionado por el Propietario
-                    </h4>
-                    <p className="text-xs text-slate-400">
-                      Escribe el código de vinculación o invitación emitido por la administración de tu empresa:
-                    </p>
-                  </div>
+                submittedManualCode ? (
+                  <div className="bg-slate-950/70 p-6 rounded-3xl border border-cyan-500/30 text-center space-y-4 animate-in fade-in">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mx-auto">
+                      <Clock className="w-6 h-6 animate-pulse" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm sm:text-base font-extrabold text-white">
+                        Solicitud de Vinculación en Espera
+                      </h4>
+                      <p className="text-xs text-slate-300 mt-1 max-w-md mx-auto">
+                        El código <span className="font-mono text-cyan-400 font-bold">{submittedManualCode}</span> ha sido registrado. Debes esperar a que el <strong className="text-white">Propietario</strong> autorice tu vinculación desde el panel de Usuarios.
+                      </p>
+                    </div>
 
-                  {/* Input de 6 Caracteres */}
-                  <div className="py-2 text-center space-y-2">
-                    <input
-                      type="text"
-                      required
-                      maxLength={8}
-                      placeholder="XM-842"
-                      value={manualPairingCode}
-                      onChange={(e) => setManualPairingCode(e.target.value.toUpperCase())}
-                      className="w-56 mx-auto text-center font-mono text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-2xl py-3 px-4 text-cyan-400 focus:outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-500/20 uppercase block"
-                    />
-                    <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500">
-                      <span>Códigos demo disponibles:</span>
-                      {['XM-792', 'XION-01', 'ALMACEN-1'].map((c) => (
-                        <button
-                          key={c}
-                          type="button"
-                          onClick={() => setManualPairingCode(c)}
-                          className="px-2 py-0.5 rounded-md bg-slate-800 text-cyan-300 font-mono text-[10px] hover:bg-slate-700"
-                        >
-                          {c}
-                        </button>
-                      ))}
+                    <div className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 text-xs">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping shrink-0" />
+                      <span className="font-semibold">Esperando aprobación del Propietario...</span>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSubmittedManualCode(null);
+                          setPairingSuccessMsg(null);
+                        }}
+                        className="text-xs text-slate-400 hover:text-slate-200 underline"
+                      >
+                        ← Introducir otro código
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={isPairingStaff}
+                        onClick={() => handleSimulateOwnerApproval(submittedManualCode)}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center gap-2 transition-all active:scale-95"
+                      >
+                        <Zap className="w-3.5 h-3.5 fill-white" />
+                        <span>Simular Aprobación Inmediata</span>
+                      </button>
                     </div>
                   </div>
+                ) : (
+                  <form onSubmit={handleManualPairSubmit} className="bg-slate-950/70 p-5 sm:p-6 rounded-3xl border border-slate-800/80 space-y-4">
+                    <div className="space-y-1">
+                      <h4 className="text-sm sm:text-base font-extrabold text-white">
+                        Ingresa el Código Proporcionado por el Propietario
+                      </h4>
+                      <p className="text-xs text-slate-400">
+                        Escribe el código de vinculación o invitación emitido por la administración de tu empresa:
+                      </p>
+                    </div>
 
-                  {/* Selector de Sucursal */}
-                  <div className="space-y-1 text-xs">
-                    <label className="block text-slate-400 font-semibold">Sucursal de Asignación *</label>
-                    <select
-                      value={selectedBranchId}
-                      onChange={(e) => setSelectedBranchId(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2.5 text-slate-100 font-semibold focus:outline-none focus:border-cyan-400"
-                    >
-                      {branchesList.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.name} ({b.address.slice(0, 35)}...)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                    {/* Input de 6 Caracteres */}
+                    <div className="py-2 text-center space-y-2">
+                      <input
+                        type="text"
+                        required
+                        maxLength={8}
+                        placeholder="XM-842"
+                        value={manualPairingCode}
+                        onChange={(e) => setManualPairingCode(e.target.value.toUpperCase())}
+                        className="w-56 mx-auto text-center font-mono text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-2xl py-3 px-4 text-cyan-400 focus:outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-500/20 uppercase block"
+                      />
+                      <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500">
+                        <span>Códigos demo disponibles:</span>
+                        {['XM-792', 'XION-01', 'ALMACEN-1'].map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => setManualPairingCode(c)}
+                            className="px-2 py-0.5 rounded-md bg-slate-800 text-cyan-300 font-mono text-[10px] hover:bg-slate-700"
+                          >
+                            {c}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
 
-                  {/* Botón de Enviar */}
-                  <div className="pt-3 border-t border-slate-800/80 flex justify-end">
-                    <button
-                      type="submit"
-                      disabled={isPairingStaff || !manualPairingCode.trim()}
-                      className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/25 flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50"
-                    >
-                      <span>{isPairingStaff ? 'Verificando y Vinculando...' : 'Autorizar y Vincular Cuenta'}</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                </form>
+                    {/* Selector de Sucursal */}
+                    <div className="space-y-1 text-xs">
+                      <label className="block text-slate-400 font-semibold">Sucursal de Asignación *</label>
+                      <select
+                        value={selectedBranchId}
+                        onChange={(e) => setSelectedBranchId(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2.5 text-slate-100 font-semibold focus:outline-none focus:border-cyan-400"
+                      >
+                        {branchesList.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name} ({b.address.slice(0, 35)}...)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Botón de Enviar */}
+                    <div className="pt-3 border-t border-slate-800/80 flex justify-end">
+                      <button
+                        type="submit"
+                        disabled={isPairingStaff || !manualPairingCode.trim()}
+                        className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/25 flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                      >
+                        <span>{isPairingStaff ? 'Enviando Solicitud...' : 'Enviar Solicitud al Propietario'}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </form>
+                )
               )}
 
             </div>

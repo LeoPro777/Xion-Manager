@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, status, Body, HTTPException, Query, Request, Header
 from datetime import datetime, date, timedelta
 from typing import Optional, List
+from collections import defaultdict
+import time
 import json
 from app.core.config import settings
 from app.schemas.schemas import (
@@ -1870,11 +1872,32 @@ staff_pairings_db = [
     }
 ]
 
+# Rate Limiter en memoria para endpoints de vinculación (Prevención de fuerza bruta en códigos de 6 caracteres)
+pairing_rate_limit_store = defaultdict(list)
+
+def check_pairing_rate_limit(client_ip: str, max_requests: int = 5, window_seconds: int = 60):
+    now = time.time()
+    timestamps = [t for t in pairing_rate_limit_store[client_ip] if now - t < window_seconds]
+    if len(timestamps) >= max_requests:
+        retry_after = int(window_seconds - (now - timestamps[0]))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Demasiados intentos de vinculación. Por favor espera {max(retry_after, 1)} segundos antes de reintentar.",
+            headers={"Retry-After": str(max(retry_after, 1))}
+        )
+    timestamps.append(now)
+    pairing_rate_limit_store[client_ip] = timestamps
+
+
 @api_router.post("/staff/request-pairing")
-async def request_staff_pairing(payload: dict = Body(...)):
+async def request_staff_pairing(request: Request, payload: dict = Body(...)):
     """
     Genera un código de 6 caracteres y QR para vincular Almacenista, Gerente o Contador.
+    Aplica rate limiting (máx 10 peticiones por minuto por IP).
     """
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    check_pairing_rate_limit(client_ip, max_requests=10, window_seconds=60)
+
     import random
     code = payload.get("pairing_code") or f"XM-{random.randint(100, 999)}"
     code = code.upper().strip()
@@ -1913,11 +1936,18 @@ async def get_staff_pairing_status(pairing_code: str):
     return {"status": "PENDING", "pairing_code": code}
 
 @api_router.post("/staff/confirm-pairing")
-async def confirm_staff_pairing(payload: dict = Body(...)):
+async def confirm_staff_pairing(request: Request, payload: dict = Body(...)):
     """
-    Confirma e introduce al personal no-propietario mediante código ingresado o escaneado.
+    Registra el intento de vinculación del colaborador.
+    Aplica rate limit estricto (máx 5 intentos/minuto) y exige SIEMPRE la aprobación del Propietario.
     """
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    check_pairing_rate_limit(client_ip, max_requests=5, window_seconds=60)
+
     code = (payload.get("pairing_code") or "").upper().strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Debes proporcionar un código de vinculación válido.")
+
     role = payload.get("role", "SUPERVISOR")
     branch_id = payload.get("branch_id") or "branch-1"
     branch_name = "Sucursal Principal - Centro"
@@ -1926,34 +1956,52 @@ async def confirm_staff_pairing(payload: dict = Body(...)):
             branch_name = b["name"]
             break
 
-    found = False
+    # Verificar si el código ya existe en la base de solicitudes
+    existing = None
     for s in staff_pairings_db:
         if s["pairing_code"].upper() == code:
-            s["status"] = "APPROVED"
-            s["role"] = role
-            s["branch_id"] = branch_id
-            s["branch_name"] = branch_name
-            found = True
+            existing = s
             break
 
-    if not found:
-        staff_pairings_db.append({
+    # Si ya existía y el propietario ya la autorizó explícitamente desde Users
+    if existing and existing.get("status") == "APPROVED":
+        return {
+            "status": "APPROVED",
+            "message": f"Personal vinculado exitosamente como {existing.get('role', role)}",
+            "role": existing.get("role", role),
+            "branch_id": existing.get("branch_id", branch_id),
+            "branch_name": existing.get("branch_name", branch_name),
+            "onboarding_completed": True
+        }
+
+    # Si no había sido aprobada, se registra/actualiza en estado PENDING y debe esperar
+    if existing:
+        existing["role"] = role
+        existing["branch_id"] = branch_id
+        existing["branch_name"] = branch_name
+    else:
+        req = {
             "pairing_code": code,
+            "user_id": payload.get("user_id"),
+            "email": payload.get("email") or f"colaborador.{code.lower()}@xion.com",
+            "full_name": payload.get("full_name") or f"Colaborador ({role})",
             "role": role,
             "branch_id": branch_id,
             "branch_name": branch_name,
-            "status": "APPROVED",
+            "status": "PENDING",
             "created_at": datetime.utcnow().isoformat(),
             "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
-        })
+        }
+        staff_pairings_db.append(req)
 
     return {
-        "status": "APPROVED",
-        "message": f"Personal vinculado exitosamente con rol {role}",
+        "status": "PENDING",
+        "pairing_code": code,
+        "message": "Solicitud de vinculación enviada al Propietario. Esperando su autorización desde el panel de Usuarios.",
         "role": role,
         "branch_id": branch_id,
         "branch_name": branch_name,
-        "onboarding_completed": True
+        "onboarding_completed": False
     }
 
 @api_router.get("/staff/pending-requests")
