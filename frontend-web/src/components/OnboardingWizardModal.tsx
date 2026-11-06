@@ -55,12 +55,12 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   // Paso 1: Datos Personales y Compañía(s)
   const [fullName, setFullName] = useState(currentUser.full_name || '');
   const [personalPhone, setPersonalPhone] = useState(currentUser.phone || '');
-  const [companyTradeName, setCompanyTradeName] = useState('Mi Comercio Xion');
-  const [companyLegalName, setCompanyLegalName] = useState('Inversiones Xion C.A.');
-  const [companyTaxId, setCompanyTaxId] = useState('J-50123456-7');
-  const [companyPhone, setCompanyPhone] = useState('+58 414-1234567');
-  const [companyEmail, setCompanyEmail] = useState(currentUser.email || 'contacto@xion.com');
-  const [companyAddress, setCompanyAddress] = useState('Av. Principal, Edificio Central, Piso 1');
+  const [companyTradeName, setCompanyTradeName] = useState('');
+  const [companyLegalName, setCompanyLegalName] = useState('');
+  const [companyTaxId, setCompanyTaxId] = useState('');
+  const [companyPhone, setCompanyPhone] = useState('');
+  const [companyEmail, setCompanyEmail] = useState(currentUser.email || '');
+  const [companyAddress, setCompanyAddress] = useState('');
   
   // Múltiples Compañías
   const [additionalCompanies, setAdditionalCompanies] = useState<AdditionalCompany[]>([]);
@@ -144,17 +144,15 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     }).catch(() => {});
   }, []);
 
-  // Generación y cuenta regresiva del código de vinculación para colaboradores
+  // Generación y cuenta regresiva del código de vinculación para colaboradores (6 dígitos numéricos)
   useEffect(() => {
     if (step === 'STAFF_PAIRING') {
       const generateNewCode = async () => {
-        const randomNum = Math.floor(100 + Math.random() * 900);
-        const code = `XM-${randomNum}`;
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
         const req = await api.requestStaffPairing({
           user_id: currentUser.id,
           email: currentUser.email,
           full_name: currentUser.full_name,
-          role: selectedStaffRole,
           pairing_code: code
         });
         setStaffPairingCode(req.pairing_code);
@@ -164,7 +162,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
       };
       generateNewCode();
     }
-  }, [step, selectedStaffRole]);
+  }, [step]);
 
   // Temporizador regresivo de 15 minutos
   useEffect(() => {
@@ -200,11 +198,11 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
           handleExecuteStaffConnection(
             res.branch_id || selectedBranchId,
             res.branch_name || 'Sucursal Asignada',
-            res.role || selectedStaffRole
+            res.role || 'CASHIER'
           );
         } else if (res.status === 'REJECTED') {
           setPairingStatus('REJECTED');
-          setErrorMsg(res.message || 'La solicitud de vinculación fue rechazada por el administrador.');
+          setErrorMsg(res.message || 'La solicitud de vinculación fue rechazada por el dueño.');
           setSubmittedManualCode(null);
           setPairingSuccessMsg(null);
         } else if (res.status === 'EXPIRED') {
@@ -228,13 +226,11 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     setPairingSuccessMsg(null);
     setIsPairingStaff(true);
     try {
-      const randomNum = Math.floor(100 + Math.random() * 900);
-      const code = `XM-${randomNum}`;
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
       const req = await api.requestStaffPairing({
         user_id: currentUser.id,
         email: currentUser.email,
         full_name: currentUser.full_name,
-        role: selectedStaffRole,
         pairing_code: code
       });
       setStaffPairingCode(req.pairing_code);
@@ -251,16 +247,14 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
   const handleShareWhatsApp = () => {
     if (!staffPairingCode) return;
-    const roleName = getRoleLabel(selectedStaffRole);
-    const text = `Hola, solicito acceso a Xion Manager como ${roleName}. Mi código de vinculación es: ${staffPairingCode}`;
+    const text = `Hola, solicito acceso a Xion Manager. Mi código de vinculación numérico es: ${staffPairingCode}`;
     const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
     window.open(url, '_blank');
   };
 
   const handleCopyShareText = () => {
     if (!staffPairingCode) return;
-    const roleName = getRoleLabel(selectedStaffRole);
-    const text = `Hola, solicito acceso a Xion Manager como ${roleName}. Mi código de vinculación es: ${staffPairingCode}`;
+    const text = `Hola, solicito acceso a Xion Manager. Mi código de vinculación numérico es: ${staffPairingCode}`;
     navigator.clipboard.writeText(text);
     setIsCopiedShare(true);
     setTimeout(() => setIsCopiedShare(false), 2500);
@@ -288,37 +282,33 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
   const handleManualPairSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!manualPairingCode.trim()) return;
+    const cleanCode = manualPairingCode.replace(/[^0-9]/g, '').trim();
+    if (cleanCode.length !== 6) {
+      setErrorMsg('El código de vinculación debe ser exactamente de 6 dígitos numéricos.');
+      return;
+    }
     setIsPairingStaff(true);
     setErrorMsg(null);
     setPairingSuccessMsg(null);
 
-    let cleanCode = manualPairingCode.trim().toUpperCase();
-    if (!cleanCode.startsWith('XM-') && /^\d+$/.test(cleanCode)) {
-      cleanCode = `XM-${cleanCode}`;
-    }
-
     try {
       const res = await api.confirmStaffPairing({
         pairing_code: cleanCode,
-        branch_id: selectedBranchId,
-        role: selectedStaffRole,
         user_id: currentUser.id
       });
 
       if (res.status === 'APPROVED') {
         setPairingStatus('APPROVED');
         handleExecuteStaffConnection(
-          res.branch_id,
-          res.branch_name,
-          res.role
+          res.branch_id || 'branch-1',
+          res.branch_name || 'Sucursal Asignada',
+          res.role || 'CASHIER'
         );
       } else {
-        // En estado PENDING: Espera explícita de autorización del Propietario
         setIsPairingStaff(false);
         setSubmittedManualCode(cleanCode);
         setPairingStatus('PENDING');
-        setPairingSuccessMsg(res.message || 'Solicitud enviada. Esperando que el Propietario autorice el acceso desde Usuarios.');
+        setPairingSuccessMsg(res.message || 'Código registrado. Esperando que el Dueño autorice el acceso y asigne tu rol.');
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Código de vinculación inválido o expirado.');
@@ -330,8 +320,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     setIsPairingStaff(true);
     const targetCode = codeToApprove || submittedManualCode || staffPairingCode;
     const branch = branchesList.find(b => b.id === selectedBranchId) || branchesList[0] || { id: 'branch-1', name: 'Sucursal Principal - Centro' };
-    await api.approveStaffPairingRequest(targetCode, branch.id);
-    handleExecuteStaffConnection(branch.id, branch.name, selectedStaffRole);
+    const res = await api.approveStaffPairingRequest(targetCode, branch.id, 'CASHIER');
+    handleExecuteStaffConnection(branch.id, branch.name, res?.request?.role || 'CASHIER');
   };
 
   const handleAddAdditionalCompany = () => {
@@ -453,8 +443,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   Bienvenido a Xion-Manager
                 </span>
                 {step === 'STAFF_PAIRING' && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                    {getRoleLabel(selectedStaffRole)}
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                    Acceso Colaborador
                   </span>
                 )}
               </div>
@@ -524,7 +514,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
           )}
 
           {/* ============================================================ */}
-          {/* PASO 0: SELECCIÓN DE ROL (PROPIETARIO, ALMACENISTA, GERENTE, CONTADOR) */}
+          {/* PASO 0: SELECCIÓN DE PERFIL (DUEÑO U OTRO)                  */}
           {/* ============================================================ */}
           {step === 0 && (
             <div className="space-y-6 animate-in fade-in duration-200">
@@ -536,138 +526,69 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   ¿Cómo deseas ingresar a Xion Manager?
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Selecciona tu rol. Si eres el Propietario configurarás tu empresa y licencias; si eres colaborador, te vincularás mediante código o QR emitido por tu negocio.
+                  Selecciona si eres el Dueño de la empresa o un Colaborador. El formulario de Dueño es obligatorio para configurar el comercio; si eres colaborador, emitirás un código numérico de 6 dígitos para que el dueño te autorice.
                 </p>
               </div>
 
-              {/* Grid de 4 Roles */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2">
+              {/* Grid Simplificado: Solo Dueño u Otro */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                 
-                {/* 1. Propietario */}
+                {/* 1. Dueño / Propietario */}
                 <div
                   onClick={() => setStep(1)}
-                  className="group relative p-5 rounded-2xl bg-gradient-to-b from-amber-500/10 via-slate-900/90 to-slate-950 border border-amber-500/30 hover:border-amber-400 hover:shadow-xl hover:shadow-amber-500/10 cursor-pointer transition-all flex flex-col justify-between hover:scale-[1.02]"
+                  className="group relative p-6 rounded-2xl bg-gradient-to-b from-amber-500/10 via-slate-900/90 to-slate-950 border-2 border-amber-500/40 hover:border-amber-400 hover:shadow-xl hover:shadow-amber-500/10 cursor-pointer transition-all flex flex-col justify-between hover:scale-[1.02]"
                 >
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 shadow-md">
-                        <Crown className="w-5 h-5" />
+                      <div className="w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 shadow-md">
+                        <Crown className="w-6 h-6" />
                       </div>
-                      <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      <span className="text-[10px] font-black uppercase px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
                         Control Maestro
                       </span>
                     </div>
                     <div>
-                      <h4 className="text-sm font-extrabold text-white group-hover:text-amber-300 transition-colors">
-                        Propietario / Dueño del Negocio
+                      <h4 className="text-base font-extrabold text-white group-hover:text-amber-300 transition-colors">
+                        Dueño / Propietario
                       </h4>
                       <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                        Crea y administra tu empresa, configura sucursales, terminales de caja y gestiona la suscripción comercial Xion-Pay.
+                        Crea y administra tu empresa, sucursales, cajas POS y activa la suscripción comercial a través del formulario de configuración obligatorio.
                       </p>
                     </div>
                   </div>
 
-                  <div className="pt-4 mt-3 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-amber-300 group-hover:translate-x-1 transition-transform">
-                    <span>Configurar mi Empresa</span>
+                  <div className="pt-4 mt-4 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-amber-300 group-hover:translate-x-1 transition-transform">
+                    <span>Configurar mi Empresa (Obligatorio)</span>
                     <ArrowRight className="w-4 h-4" />
                   </div>
                 </div>
 
-                {/* 2. Almacenista */}
+                {/* 2. Otro / Colaborador */}
                 <div
-                  onClick={() => {
-                    setSelectedStaffRole('SUPERVISOR');
-                    setStep('STAFF_PAIRING');
-                  }}
-                  className="group relative p-5 rounded-2xl bg-gradient-to-b from-cyan-500/10 via-slate-900/90 to-slate-950 border border-cyan-500/30 hover:border-cyan-400 hover:shadow-xl hover:shadow-cyan-500/10 cursor-pointer transition-all flex flex-col justify-between hover:scale-[1.02]"
+                  onClick={() => setStep('STAFF_PAIRING')}
+                  className="group relative p-6 rounded-2xl bg-gradient-to-b from-cyan-500/10 via-slate-900/90 to-slate-950 border-2 border-cyan-500/40 hover:border-cyan-400 hover:shadow-xl hover:shadow-cyan-500/10 cursor-pointer transition-all flex flex-col justify-between hover:scale-[1.02]"
                 >
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <div className="w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-300 shadow-md">
-                        <Boxes className="w-5 h-5" />
+                      <div className="w-12 h-12 rounded-xl bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-300 shadow-md">
+                        <UserCheck className="w-6 h-6" />
                       </div>
-                      <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                        Gestión Stock
+                      <span className="text-[10px] font-black uppercase px-2.5 py-1 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                        Acceso Colaborador
                       </span>
                     </div>
                     <div>
-                      <h4 className="text-sm font-extrabold text-white group-hover:text-cyan-300 transition-colors">
-                        Almacenista / Inventario
+                      <h4 className="text-base font-extrabold text-white group-hover:text-cyan-300 transition-colors">
+                        Otro / Colaborador
                       </h4>
                       <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                        Control de existencias, recepción de compras a proveedores, registro de mermas y traslados de mercancía entre sedes.
+                        Emite o introduce tu código numérico de 6 dígitos. No requieres elegir rol: el dueño de la tienda lo asignará al autorizarte.
                       </p>
                     </div>
                   </div>
 
-                  <div className="pt-4 mt-3 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-cyan-300 group-hover:translate-x-1 transition-transform">
-                    <span>Vincularme con Código o QR</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </div>
-                </div>
-
-                {/* 3. Gerente */}
-                <div
-                  onClick={() => {
-                    setSelectedStaffRole('BRANCH_MANAGER');
-                    setStep('STAFF_PAIRING');
-                  }}
-                  className="group relative p-5 rounded-2xl bg-gradient-to-b from-emerald-500/10 via-slate-900/90 to-slate-950 border border-emerald-500/30 hover:border-emerald-400 hover:shadow-xl hover:shadow-emerald-500/10 cursor-pointer transition-all flex flex-col justify-between hover:scale-[1.02]"
-                >
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-300 shadow-md">
-                        <Store className="w-5 h-5" />
-                      </div>
-                      <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                        Operativa Local
-                      </span>
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-extrabold text-white group-hover:text-emerald-300 transition-colors">
-                        Gerente de Sucursal
-                      </h4>
-                      <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                        Supervisión de operaciones de la sede asignada, monitoreo de ventas, cajas y autorizaciones de turnos en vivo.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 mt-3 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-emerald-300 group-hover:translate-x-1 transition-transform">
-                    <span>Vincularme con Código o QR</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </div>
-                </div>
-
-                {/* 4. Contador */}
-                <div
-                  onClick={() => {
-                    setSelectedStaffRole('AUDITOR');
-                    setStep('STAFF_PAIRING');
-                  }}
-                  className="group relative p-5 rounded-2xl bg-gradient-to-b from-purple-500/10 via-slate-900/90 to-slate-950 border border-purple-500/30 hover:border-purple-400 hover:shadow-xl hover:shadow-purple-500/10 cursor-pointer transition-all flex flex-col justify-between hover:scale-[1.02]"
-                >
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-purple-300 shadow-md">
-                        <FileSpreadsheet className="w-5 h-5" />
-                      </div>
-                      <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                        Auditoría Fiscal
-                      </span>
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-extrabold text-white group-hover:text-purple-300 transition-colors">
-                        Contador / Auditor Fiscal
-                      </h4>
-                      <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                        Supervisión contable, arqueos ciegos de cajas, bitácoras inmutables, libros de ventas e impuestos del negocio.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 mt-3 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-purple-300 group-hover:translate-x-1 transition-transform">
-                    <span>Vincularme con Código o QR</span>
+                  <div className="pt-4 mt-4 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-cyan-300 group-hover:translate-x-1 transition-transform">
+                    <span>Emitir Código de 6 Dígitos</span>
                     <ArrowRight className="w-4 h-4" />
                   </div>
                 </div>
@@ -678,19 +599,19 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
               <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 flex items-center gap-3 text-xs text-slate-400">
                 <ShieldCheck className="w-4 h-4 text-cyan-400 shrink-0" />
                 <span>
-                  <strong>Seguridad de Acceso:</strong> Los colaboradores nunca requieren introducir credenciales maestras. La vinculación asocia el usuario directamente a la sucursal designada por el Propietario.
+                  <strong>Flujo Seguro de Vinculación:</strong> Si eres colaborador, solo necesitas emitir tu código de 6 dígitos. El dueño lo ingresará en el módulo de Usuarios y definirá tus permisos.
                 </span>
               </div>
             </div>
           )}
 
           {/* ============================================================ */}
-          {/* VINCULACIÓN DE PERSONAL (ALMACENISTA, GERENTE, CONTADOR)     */}
+          {/* VINCULACIÓN DE PERSONAL (CÓDIGO NUMÉRICO DE 6 DÍGITOS)       */}
           {/* ============================================================ */}
           {step === 'STAFF_PAIRING' && (
             <div className="space-y-5 animate-in fade-in duration-200">
               
-              {/* Botón Volver y Header del Rol */}
+              {/* Botón Volver */}
               <div className="flex items-center justify-between">
                 <button
                   type="button"
@@ -698,13 +619,12 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   className="px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-slate-300 text-xs font-bold flex items-center gap-1.5 border border-slate-700 transition-all"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" />
-                  <span>Volver a Elegir Rol</span>
+                  <span>Volver a Inicio</span>
                 </button>
 
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400">Rol a vincular:</span>
                   <span className="text-xs font-black px-2.5 py-1 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
-                    {getRoleLabel(selectedStaffRole)}
+                    Solicitud de Acceso Colaborador
                   </span>
                 </div>
               </div>
@@ -721,8 +641,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   }`}
                 >
                   <QrCode className="w-4 h-4 shrink-0" />
-                  <span className="hidden sm:inline">Generar Código y QR (Flujo Smart TV)</span>
-                  <span className="sm:hidden">Generar QR</span>
+                  <span>Código Emitido</span>
                 </button>
                 <button
                   type="button"
@@ -734,8 +653,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   }`}
                 >
                   <KeyRound className="w-4 h-4 shrink-0" />
-                  <span className="hidden sm:inline">Introducir Código de Invitación</span>
-                  <span className="sm:hidden">Ingresar Código</span>
+                  <span>Introducir Código</span>
                 </button>
               </div>
 
@@ -803,24 +721,24 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                         {/* Código QR Vectorial */}
                         <div className="flex flex-col items-center gap-2">
                           <QrCodeSvg 
-                            value={staffPairingQr || `xion://pair-staff?code=${staffPairingCode}&role=${selectedStaffRole}`}
+                            value={staffPairingQr || `xion://pair-staff?code=${staffPairingCode}`}
                             size={160}
-                            logoText={selectedStaffRole === 'SUPERVISOR' ? 'ALM' : selectedStaffRole === 'BRANCH_MANAGER' ? 'GER' : 'CON'}
+                            logoText="XION"
                           />
                           <span className="text-[10px] text-slate-500 font-mono">
                             Escanear con App o Cámara Móvil
                           </span>
                         </div>
 
-                        {/* Código Alfanumérico Grande y Controles */}
+                        {/* Código Numérico de 6 Dígitos Grande y Controles */}
                         <div className="space-y-3 flex flex-col items-center sm:items-start text-center sm:text-left w-full sm:w-auto">
                           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                            Código de Vinculación
+                            Código de Vinculación (6 Dígitos)
                           </span>
                           
                           <div className="inline-flex items-center gap-2 sm:gap-3 p-2.5 sm:p-3 px-4 sm:px-5 rounded-2xl bg-slate-900 border-2 border-cyan-500/50 shadow-xl shadow-cyan-500/10">
                             <span className="font-mono text-2xl sm:text-4xl font-black text-cyan-400 tracking-widest">
-                              {staffPairingCode || 'XM-842'}
+                              {staffPairingCode || '842109'}
                             </span>
                             <button
                               type="button"
@@ -850,7 +768,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                           {/* Radar de Estado en Vivo */}
                           <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 text-xs">
                             <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
-                            <span className="text-[11px] font-semibold">Esperando autorización del Propietario en vivo...</span>
+                            <span className="text-[11px] font-semibold">Esperando autorización y asignación de rol del Dueño...</span>
                           </div>
                         </div>
                       </div>
@@ -943,68 +861,43 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   </div>
                 ) : (
                   <form onSubmit={handleManualPairSubmit} className="bg-slate-950/70 p-4 sm:p-6 rounded-3xl border border-slate-800/80 space-y-4">
-                    <div className="space-y-1">
+                    <div className="space-y-1 text-center sm:text-left">
                       <h4 className="text-sm sm:text-base font-extrabold text-white">
-                        Ingresa el Código Proporcionado por el Propietario
+                        Ingresa el Código Numérico de 6 Dígitos
                       </h4>
                       <p className="text-xs text-slate-400">
-                        Escribe el código de vinculación o invitación emitido por la administración de tu empresa:
+                        Escribe el código proporcionado por el Dueño del negocio:
                       </p>
                     </div>
 
-                    {/* Input de Caracteres Optimizado para Móvil */}
+                    {/* Input Numérico de 6 Dígitos Optimizado para Móvil */}
                     <div className="py-2 text-center space-y-2">
                       <input
                         type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
                         required
-                        maxLength={10}
-                        placeholder="XM-842"
-                        autoCapitalize="characters"
+                        maxLength={6}
+                        placeholder="123456"
                         autoCorrect="off"
                         spellCheck={false}
                         value={manualPairingCode}
-                        onChange={(e) => setManualPairingCode(e.target.value.toUpperCase())}
-                        className="w-full sm:w-60 mx-auto text-center font-mono text-2xl sm:text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-2xl py-3 px-4 text-cyan-400 focus:outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-500/20 uppercase block min-h-[48px]"
+                        onChange={(e) => setManualPairingCode(e.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
+                        className="w-full sm:w-64 mx-auto text-center font-mono text-3xl sm:text-4xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-2xl py-3 px-4 text-cyan-400 focus:outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-500/20 block min-h-[48px]"
                       />
-                      <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-slate-500 pt-1">
-                        <span>Códigos demo:</span>
-                        {['XM-792', 'XM-777', 'XION-01'].map((c) => (
-                          <button
-                            key={c}
-                            type="button"
-                            onClick={() => setManualPairingCode(c)}
-                            className="px-2.5 py-1 rounded-md bg-slate-800 text-cyan-300 font-mono text-[11px] hover:bg-slate-700 active:scale-95 transition-all"
-                          >
-                            {c}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Selector de Sucursal */}
-                    <div className="space-y-1 text-xs">
-                      <label className="block text-slate-400 font-semibold">Sucursal de Asignación *</label>
-                      <select
-                        value={selectedBranchId}
-                        onChange={(e) => setSelectedBranchId(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2.5 text-slate-100 font-semibold focus:outline-none focus:border-cyan-400 min-h-[44px]"
-                      >
-                        {branchesList.map((b) => (
-                          <option key={b.id} value={b.id}>
-                            {b.name} ({b.address.slice(0, 35)}...)
-                          </option>
-                        ))}
-                      </select>
+                      <p className="text-[11px] text-slate-500 pt-1">
+                        Debe contener exactamente 6 dígitos numéricos
+                      </p>
                     </div>
 
                     {/* Botón de Enviar */}
                     <div className="pt-3 border-t border-slate-800/80 flex justify-end">
                       <button
                         type="submit"
-                        disabled={isPairingStaff || !manualPairingCode.trim()}
+                        disabled={isPairingStaff || manualPairingCode.length !== 6}
                         className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/25 flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 min-h-[44px]"
                       >
-                        <span>{isPairingStaff ? 'Enviando Solicitud...' : 'Enviar Solicitud al Propietario'}</span>
+                        <span>{isPairingStaff ? 'Enviando Solicitud...' : 'Solicitar Acceso al Dueño'}</span>
                         <ArrowRight className="w-4 h-4" />
                       </button>
                     </div>

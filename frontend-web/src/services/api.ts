@@ -500,12 +500,12 @@ export const api = {
     }
 
     const roleLabels: Record<Role, string> = {
-      OWNER: 'Juan Delgado (Dueño)',
-      ADMIN: 'Carlos Mendoza (Administrador)',
-      BRANCH_MANAGER: 'María Silva (Gerente Lago Mall)',
-      SUPERVISOR: 'Elena Blanco (Supervisora)',
-      AUDITOR: 'Roberto Gómez (Auditor Fiscal)',
-      CASHIER: 'Pedro Pérez (Cajero Principal)'
+      OWNER: 'Propietario / Dueño',
+      ADMIN: 'Administrador',
+      BRANCH_MANAGER: 'Gerente de Sucursal',
+      SUPERVISOR: 'Supervisor / Almacén',
+      AUDITOR: 'Auditor Fiscal',
+      CASHIER: 'Cajero POS'
     };
     return {
       id: `usr-${role.toLowerCase()}-01`,
@@ -895,8 +895,8 @@ export const api = {
     return mockCashRegisters.find(r => r.id === id) || (mockCashRegisters[0] as CashRegister);
   },
 
-  // Flujo de Vinculación de Personal (Almacenista, Gerente, Contador) con Código de 6 caracteres y QR
-  async requestStaffPairing(payload: { user_id?: string; email?: string; full_name?: string; role: Role; pairing_code?: string }): Promise<{ pairing_code: string; expires_in_seconds: number; qr_payload: string }> {
+  // Flujo de Vinculación de Personal con Código Numérico de 6 Dígitos y QR
+  async requestStaffPairing(payload: { user_id?: string; email?: string; full_name?: string; role?: Role; pairing_code?: string }): Promise<{ pairing_code: string; expires_in_seconds: number; qr_payload: string }> {
     try {
       const res = await fetch('/api/v1/staff/request-pairing', {
         method: 'POST',
@@ -908,31 +908,32 @@ export const api = {
       }
     } catch {}
     
-    // Offline / fallback
-    const code = payload.pairing_code || `XM-${Math.floor(100 + Math.random() * 900)}`;
+    // Offline / fallback numérico de 6 dígitos
+    const code = payload.pairing_code || `${Math.floor(100000 + Math.random() * 900000)}`;
     return {
       pairing_code: code,
       expires_in_seconds: 900,
-      qr_payload: `xion://pair-staff?code=${code}&role=${payload.role}`
+      qr_payload: `xion://pair-staff?code=${code}`
     };
   },
 
   async getStaffPairingStatus(pairingCode: string): Promise<{ status: 'PENDING' | 'APPROVED' | 'EXPIRED' | 'REJECTED'; message?: string; role?: Role; branch_id?: string; branch_name?: string }> {
+    const cleanCode = pairingCode.replace(/[^0-9]/g, '').trim() || pairingCode.trim();
     try {
-      const res = await fetch(`/api/v1/staff/pairing-status/${pairingCode.toUpperCase().trim()}`);
+      const res = await fetch(`/api/v1/staff/pairing-status/${cleanCode}`);
       if (res.ok) {
         return await res.json();
       }
     } catch {}
 
-    const cached = localStorage.getItem(`xion_staff_paired_${pairingCode.toUpperCase().trim()}`);
+    const cached = localStorage.getItem(`xion_staff_paired_${cleanCode}`);
     if (cached) {
       return JSON.parse(cached);
     }
     return { status: 'PENDING' };
   },
 
-  async confirmStaffPairing(payload: { pairing_code: string; branch_id?: string; role: Role; user_id?: string }): Promise<{ status: string; message: string; role: Role; branch_id: string; branch_name: string; onboarding_completed: boolean }> {
+  async confirmStaffPairing(payload: { pairing_code: string; branch_id?: string; role?: Role; user_id?: string }): Promise<{ status: string; message: string; role?: Role; branch_id?: string; branch_name?: string; onboarding_completed: boolean }> {
     try {
       const res = await fetch('/api/v1/staff/confirm-pairing', {
         method: 'POST',
@@ -954,10 +955,10 @@ export const api = {
       const branch = mockBranches.find(b => b.id === payload.branch_id) || mockBranches[0];
       return {
         status: 'PENDING',
-        message: 'Código recibido. Esperando aprobación del Propietario desde el panel de Usuarios.',
-        role: payload.role,
-        branch_id: branch.id,
-        branch_name: branch.name,
+        message: 'Código recibido. Esperando aprobación y asignación de rol del Dueño desde el panel de Usuarios.',
+        role: payload.role || 'CASHIER',
+        branch_id: branch?.id || '',
+        branch_name: branch?.name || 'Sucursal Asignada',
         onboarding_completed: false
       };
     }
@@ -1515,6 +1516,25 @@ export const api = {
         ? 'El usuario ha sido aprobado exitosamente.' 
         : 'La solicitud de usuario ha sido rechazada.'
     };
+  },
+
+  async updateUser(userId: string, data: Partial<User>): Promise<User> {
+    try {
+      const res = await fetch(`/api/v1/users/${userId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // offline fallback
+    }
+    return {
+      id: userId,
+      ...data
+    } as User;
   },
 
   // 6. Audit & Cash Sessions

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Users as UsersIcon, UserCheck, UserX, Plus, Shield, CheckCircle2, 
   Clock, AlertCircle, QrCode, KeyRound, X, Copy, Check, Store,
-  Smartphone, RefreshCw, Sparkles, Trash2, ArrowRight
+  Smartphone, RefreshCw, Sparkles, Trash2, ArrowRight, Edit, Sliders, Save
 } from 'lucide-react';
 import { api } from '../services/api';
 import { User, Role, Branch } from '../types';
@@ -14,16 +14,26 @@ export const UsersPage: React.FC = () => {
   const [actionMsg, setActionMsg] = useState('');
   const [branches, setBranches] = useState<Branch[]>([]);
 
-  // Modal de Vinculación de Personal (Smart TV / Código 6 caracteres / QR)
+  // Modal de Edición de Usuario y Permisos (Dueño)
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editFullName, setEditFullName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editRole, setEditRole] = useState<Role>('CASHIER');
+  const [editBranchId, setEditBranchId] = useState<string>('global');
+  const [editIsActive, setEditIsActive] = useState<boolean>(true);
+  const [editApprovalStatus, setEditApprovalStatus] = useState<'APPROVED' | 'PENDING' | 'REJECTED'>('APPROVED');
+  const [isSavingUser, setIsSavingUser] = useState(false);
+
+  // Modal de Vinculación de Personal (Código Numérico de 6 Dígitos / QR)
   const [showPairingModal, setShowPairingModal] = useState(false);
   const [pairingTab, setPairingTab] = useState<'PENDING' | 'ENTER_CODE' | 'INVITE_QR'>('PENDING');
   const [pairingInputCode, setPairingInputCode] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState('');
-  const [selectedRole, setSelectedRole] = useState<Role>('SUPERVISOR');
+  const [selectedRole, setSelectedRole] = useState<Role>('CASHIER');
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [isApproving, setIsApproving] = useState(false);
   const [copiedInviteCode, setCopiedInviteCode] = useState(false);
-  const [generatedInviteCode, setGeneratedInviteCode] = useState('XM-792');
+  const [generatedInviteCode, setGeneratedInviteCode] = useState('842109');
 
   useEffect(() => {
     api.getUsers().then(setUsers);
@@ -36,6 +46,43 @@ export const UsersPage: React.FC = () => {
       if (reqs.length === 0) setPairingTab('ENTER_CODE');
     });
   }, []);
+
+  const handleOpenEditUser = (u: User) => {
+    setEditingUser(u);
+    setEditFullName(u.full_name || '');
+    setEditPhone(u.phone || '');
+    setEditRole(u.role || 'CASHIER');
+    setEditBranchId(u.branch_id || 'global');
+    setEditIsActive(u.is_active ?? true);
+    setEditApprovalStatus(u.approval_status || 'APPROVED');
+  };
+
+  const handleSaveUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    setIsSavingUser(true);
+    try {
+      const branchObj = branches.find(b => b.id === editBranchId);
+      const branchName = editBranchId === 'global' ? 'Acceso Global (Todas)' : branchObj?.name;
+      const updated = await api.updateUser(editingUser.id, {
+        full_name: editFullName.trim(),
+        phone: editPhone.trim(),
+        role: editRole,
+        branch_id: editBranchId === 'global' ? undefined : editBranchId,
+        branch_name: branchName,
+        is_active: editIsActive,
+        approval_status: editApprovalStatus
+      });
+      setUsers(users.map(u => u.id === editingUser.id ? { ...u, ...updated } : u));
+      setActionMsg('Usuario y permisos actualizados exitosamente');
+      setEditingUser(null);
+      setTimeout(() => setActionMsg(''), 4000);
+    } catch {
+      setActionMsg('Error al guardar modificaciones del usuario');
+    } finally {
+      setIsSavingUser(false);
+    }
+  };
 
   const handleOpenPairingModal = () => {
     api.getPendingStaffPairingRequests().then(reqs => {
@@ -50,8 +97,8 @@ export const UsersPage: React.FC = () => {
   };
 
   const handleGenerateNewInviteCode = () => {
-    const randomNum = Math.floor(100 + Math.random() * 900);
-    setGeneratedInviteCode(`XM-${randomNum}`);
+    const randomNum = Math.floor(100000 + Math.random() * 900000);
+    setGeneratedInviteCode(randomNum.toString());
   };
 
   const handleCopyInviteCode = () => {
@@ -221,26 +268,36 @@ export const UsersPage: React.FC = () => {
                       )}
                     </td>
                     <td className="p-3.5 text-right">
-                      {isPending ? (
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => handleApproval(u.id, 'APPROVED')}
-                            className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center gap-1"
-                          >
-                            <UserCheck className="w-3.5 h-3.5" />
-                            Aprobar
-                          </button>
-                          <button
-                            onClick={() => handleApproval(u.id, 'REJECTED')}
-                            className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white font-bold text-xs transition-colors flex items-center gap-1"
-                          >
-                            <UserX className="w-3.5 h-3.5" />
-                            Rechazar
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-slate-500 font-semibold">Activo</span>
-                      )}
+                      <div className="flex items-center justify-end gap-2">
+                        {isPending && (
+                          <>
+                            <button
+                              onClick={() => handleApproval(u.id, 'APPROVED')}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center gap-1"
+                              title="Aprobar usuario"
+                            >
+                              <UserCheck className="w-3.5 h-3.5" />
+                              Aprobar
+                            </button>
+                            <button
+                              onClick={() => handleApproval(u.id, 'REJECTED')}
+                              className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white font-bold text-xs transition-colors flex items-center gap-1"
+                              title="Rechazar usuario"
+                            >
+                              <UserX className="w-3.5 h-3.5" />
+                              Rechazar
+                            </button>
+                          </>
+                        )}
+                        <button
+                          onClick={() => handleOpenEditUser(u)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-cyan-500/20 text-cyan-400 hover:text-cyan-300 border border-slate-700/60 font-bold text-xs flex items-center gap-1 transition-all"
+                          title="Modificar usuario y permisos"
+                        >
+                          <Edit className="w-3.5 h-3.5" />
+                          <span>Editar</span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -293,24 +350,37 @@ export const UsersPage: React.FC = () => {
                 )}
               </div>
 
-              {isPending && (
-                <div className="pt-2 border-t border-slate-800/80 grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => handleApproval(u.id, 'APPROVED')}
-                    className="py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-xs flex items-center justify-center gap-1"
-                  >
-                    <UserCheck className="w-3.5 h-3.5" />
-                    Aprobar
-                  </button>
-                  <button
-                    onClick={() => handleApproval(u.id, 'REJECTED')}
-                    className="py-2 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white font-bold text-xs flex items-center justify-center gap-1"
-                  >
-                    <UserX className="w-3.5 h-3.5" />
-                    Rechazar
-                  </button>
-                </div>
-              )}
+              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleOpenEditUser(u)}
+                  className="py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs font-bold flex items-center gap-1.5"
+                >
+                  <Edit className="w-3.5 h-3.5" />
+                  <span>Editar Permisos</span>
+                </button>
+                {isPending ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => handleApproval(u.id, 'APPROVED')}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-xs flex items-center gap-1"
+                    >
+                      <UserCheck className="w-3.5 h-3.5" />
+                      Aprobar
+                    </button>
+                    <button
+                      onClick={() => handleApproval(u.id, 'REJECTED')}
+                      className="px-2.5 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-300 font-bold text-xs flex items-center gap-1"
+                    >
+                      <UserX className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-[11px] text-slate-500 font-medium">
+                    {u.is_active ? 'Cuenta Activa' : 'Desactivada'}
+                  </span>
+                )}
+              </div>
             </div>
           );
         }))}
@@ -481,17 +551,17 @@ export const UsersPage: React.FC = () => {
                     Código Mostrado por el Colaborador
                   </label>
                   <p className="text-[11px] text-slate-400">
-                    Escribe los 6 caracteres de la pantalla del empleado:
+                    Escribe los 6 dígitos numéricos de la pantalla del colaborador:
                   </p>
                   <input
                     type="text"
-                    maxLength={8}
-                    placeholder="XM-842"
-                    inputMode="text"
-                    autoCapitalize="characters"
+                    maxLength={6}
+                    placeholder="123456"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={pairingInputCode}
-                    onChange={(e) => setPairingInputCode(e.target.value.toUpperCase())}
-                    className="w-full max-w-[220px] mx-auto text-center font-mono text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-xl py-2 px-3 text-cyan-400 focus:outline-none focus:border-cyan-400 uppercase block"
+                    onChange={(e) => setPairingInputCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="w-full max-w-[200px] mx-auto text-center font-mono text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-xl py-2 px-3 text-cyan-400 focus:outline-none focus:border-cyan-400 block"
                   />
                 </div>
 
@@ -588,6 +658,149 @@ export const UsersPage: React.FC = () => {
               </div>
             )}
 
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          MODAL: EDITAR USUARIO, PERMISOS Y PROPIEDADES (DUEÑO)
+      ======================================================== */}
+      {editingUser && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in">
+          <div className="glass-panel w-full sm:max-w-md p-5 sm:p-6 rounded-t-3xl sm:rounded-2xl border border-slate-800 space-y-4 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 shrink-0">
+                  <Sliders className="w-5 h-5 text-cyan-400" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-100">Modificar Usuario y Permisos</h4>
+                  <p className="text-[11px] text-slate-400">Ajusta rol RBAC, sucursal y estado operativo</p>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setEditingUser(null)} 
+                className="w-8 h-8 rounded-lg bg-slate-900 hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveUser} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block text-slate-400 font-semibold mb-1">Nombre Completo *</label>
+                <input
+                  type="text"
+                  required
+                  value={editFullName}
+                  onChange={(e) => setEditFullName(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 font-semibold mb-1">Correo Electrónico (Solo Lectura)</label>
+                <input
+                  type="email"
+                  disabled
+                  value={editingUser.email}
+                  className="w-full bg-slate-950/60 border border-slate-800 rounded-xl p-2.5 text-slate-400 font-mono text-xs cursor-not-allowed"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 font-semibold mb-1">Teléfono / Contacto</label>
+                <input
+                  type="text"
+                  placeholder="+58 414-0000000"
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">Rol RBAC</label>
+                  <select
+                    value={editRole}
+                    onChange={(e) => setEditRole(e.target.value as Role)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
+                  >
+                    <option value="OWNER">Dueño / Propietario</option>
+                    <option value="ADMIN">Administrador</option>
+                    <option value="BRANCH_MANAGER">Gerente de Sucursal</option>
+                    <option value="SUPERVISOR">Almacén / Supervisor</option>
+                    <option value="CASHIER">Cajero POS</option>
+                    <option value="AUDITOR">Auditor Fiscal</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">Sede Asignada</label>
+                  <select
+                    value={editBranchId}
+                    onChange={(e) => setEditBranchId(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
+                  >
+                    <option value="global">Acceso Global (Todas las Sedes)</option>
+                    {branches.map(b => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">Aprobación</label>
+                  <select
+                    value={editApprovalStatus}
+                    onChange={(e) => setEditApprovalStatus(e.target.value as any)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
+                  >
+                    <option value="APPROVED">Autorizado</option>
+                    <option value="PENDING">Pendiente</option>
+                    <option value="REJECTED">Rechazado</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">Estado de Cuenta</label>
+                  <button
+                    type="button"
+                    onClick={() => setEditIsActive(!editIsActive)}
+                    className={`w-full p-2.5 rounded-xl border font-bold text-xs transition-all flex items-center justify-center gap-1.5 ${
+                      editIsActive
+                        ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                        : 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                    }`}
+                  >
+                    {editIsActive ? '✓ Cuenta Activa' : '✕ Desactivada'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-800/80">
+                <button
+                  type="button"
+                  onClick={() => setEditingUser(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-900 text-slate-400 hover:bg-slate-800 font-semibold text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingUser}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/20 flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{isSavingUser ? 'Guardando...' : 'Guardar Cambios'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

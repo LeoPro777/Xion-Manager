@@ -1722,7 +1722,7 @@ async def delete_cash_register(register_id: str):
     return {"message": "Caja eliminada"}
 
 @api_router.post("/cash-registers/{register_id}/toggle-status")
-async def toggle_cash_register_status(register_id: str, operator_name: Optional[str] = Body("Carlos Mendoza", embed=True)):
+async def toggle_cash_register_status(register_id: str, operator_name: Optional[str] = Body(None, embed=True)):
     verify_system_operational()
     for r in cash_registers_db:
         if r["id"] == register_id:
@@ -2107,22 +2107,91 @@ async def list_users(db: AsyncSession = Depends(get_db)):
     verify_system_operational()
     result = await db.execute(select(UserModel).order_by(UserModel.created_at.desc()))
     users = result.scalars().all()
-    return [
-        {
+    out = []
+    for u in users:
+        branch_name = "Acceso Global (Todas)"
+        if u.branch_id:
+            for b in branches_db:
+                if b["id"] == u.branch_id:
+                    branch_name = b["name"]
+                    break
+        out.append({
             "id": u.id,
             "email": u.email,
             "full_name": u.full_name,
+            "phone": u.phone or "",
             "role": u.role,
             "branch_id": u.branch_id,
+            "branch_name": branch_name,
             "approval_status": u.approval_status,
-            "is_active": u.is_active
-        }
-        for u in users
-    ]
+            "is_active": u.is_active,
+            "created_at": u.created_at.isoformat() if u.created_at else None
+        })
+    return out
+
+@api_router.put("/users/{user_id}")
+async def update_user(
+    user_id: str,
+    payload: dict = Body(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Permite al Dueño modificar usuarios, sus roles/permisos, sucursal asignada y propiedades operativas.
+    """
+    verify_system_operational()
+    user_res = await db.execute(select(UserModel).where(UserModel.id == user_id))
+    user = user_res.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    if "full_name" in payload and payload["full_name"]:
+        user.full_name = payload["full_name"]
+    if "phone" in payload:
+        user.phone = payload["phone"]
+    if "role" in payload and payload["role"]:
+        user.role = payload["role"]
+    if "branch_id" in payload:
+        b_id = payload["branch_id"]
+        user.branch_id = b_id if b_id and b_id not in ("all", "global", "none") else None
+    if "is_active" in payload:
+        user.is_active = bool(payload["is_active"])
+    if "approval_status" in payload and payload["approval_status"]:
+        user.approval_status = payload["approval_status"]
+        if payload["approval_status"] == "APPROVED":
+            user.is_active = True
+        elif payload["approval_status"] == "REJECTED":
+            user.is_active = False
+
+    user.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(user)
+
+    branch_name = "Acceso Global (Todas)"
+    if user.branch_id:
+        for b in branches_db:
+            if b["id"] == user.branch_id:
+                branch_name = b["name"]
+                break
+
+    return {
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "phone": user.phone or "",
+        "role": user.role,
+        "branch_id": user.branch_id,
+        "branch_name": branch_name,
+        "approval_status": user.approval_status,
+        "is_active": user.is_active,
+        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+        "message": "Usuario y permisos actualizados exitosamente"
+    }
 
 @api_router.post("/users/approval")
-async def user_approval(user_id: str = Body(...), status_val: str = Body(...), db: AsyncSession = Depends(get_db)):
+async def user_approval(payload: dict = Body(...), db: AsyncSession = Depends(get_db)):
     verify_system_operational()
+    user_id = payload.get("user_id")
+    status_val = payload.get("status") or payload.get("status_val", "APPROVED")
     user_res = await db.execute(select(UserModel).where(UserModel.id == user_id))
     user = user_res.scalar_one_or_none()
     if user:
@@ -2162,24 +2231,29 @@ def check_pairing_rate_limit(client_ip: str, max_requests: int = 5, window_secon
 @api_router.post("/staff/request-pairing")
 async def request_staff_pairing(request: Request, payload: dict = Body(...)):
     """
-    Genera un código de 6 caracteres y QR para vincular Almacenista, Gerente o Contador.
+    Genera un código numérico de 6 dígitos y QR para solicitar vinculación de personal.
     Aplica rate limiting (máx 10 peticiones por minuto por IP).
     """
     client_ip = request.client.host if request.client else "127.0.0.1"
     check_pairing_rate_limit(client_ip, max_requests=10, window_seconds=60)
 
     import random
-    code = payload.get("pairing_code") or f"XM-{random.randint(100, 999)}"
-    code = code.upper().strip()
-    role = payload.get("role", "SUPERVISOR")
+    raw_code = payload.get("pairing_code")
+    if raw_code and str(raw_code).strip():
+        code = str(raw_code).strip().upper().replace("XM-", "").replace("XM", "")
+    else:
+        code = f"{random.randint(100000, 999999)}"
+
+    # El rol será asignado por el Dueño al autorizar la solicitud
+    role = payload.get("role", "CASHIER")
     req = {
         "pairing_code": code,
         "user_id": payload.get("user_id"),
         "email": payload.get("email"),
-        "full_name": payload.get("full_name") or "Colaborador Xion",
+        "full_name": payload.get("full_name") or "Nuevo Colaborador",
         "role": role,
-        "branch_id": payload.get("branch_id", "branch-1"),
-        "branch_name": "Sucursal Principal - Centro",
+        "branch_id": payload.get("branch_id"),
+        "branch_name": "Pendiente de Asignación",
         "status": "PENDING",
         "created_at": datetime.utcnow().isoformat(),
         "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
@@ -2190,22 +2264,20 @@ async def request_staff_pairing(request: Request, payload: dict = Body(...)):
     return {
         "pairing_code": code,
         "expires_in_seconds": 900,
-        "qr_payload": f"xion://pair-staff?code={code}&role={role}",
+        "qr_payload": f"xion://pair-staff?code={code}",
         "request": req
     }
 
 @api_router.get("/staff/pairing-status/{pairing_code}")
 async def get_staff_pairing_status(pairing_code: str):
     """
-    Consulta el estado de aprobación del código de vinculación de personal.
+    Consulta el estado de aprobación del código de vinculación de personal (6 dígitos numéricos).
     Valida vigencia temporal (15 minutos) y normaliza formato.
     """
-    code = (pairing_code or "").upper().strip()
-    if not code.startswith("XM-") and code.isdigit():
-        code = f"XM-{code}"
+    code = (pairing_code or "").strip().upper().replace("XM-", "").replace("XM", "")
 
     for s in staff_pairings_db:
-        if s["pairing_code"].upper() == code:
+        if s["pairing_code"] == code or s["pairing_code"] == f"XM-{code}":
             if s.get("status") == "REJECTED":
                 return {
                     "status": "REJECTED",
@@ -2231,36 +2303,35 @@ async def get_staff_pairing_status(pairing_code: str):
 @api_router.post("/staff/confirm-pairing")
 async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db: AsyncSession = Depends(get_db)):
     """
-    Registra el intento de vinculación del colaborador.
+    Registra el intento de vinculación del colaborador ingresando el código emitido.
     Aplica rate limit estricto (máx 10 intentos/minuto), valida expiración y verifica autorización.
     """
     client_ip = request.client.host if request.client else "127.0.0.1"
     check_pairing_rate_limit(client_ip, max_requests=10, window_seconds=60)
 
-    code = (payload.get("pairing_code") or "").upper().strip()
+    code = (payload.get("pairing_code") or "").strip().upper().replace("XM-", "").replace("XM", "")
     if not code:
-        raise HTTPException(status_code=400, detail="Debes proporcionar un código de vinculación válido.")
-    if not code.startswith("XM-") and code.isdigit():
-        code = f"XM-{code}"
+        raise HTTPException(status_code=400, detail="Debes proporcionar un código numérico de 6 dígitos válido.")
 
-    role = payload.get("role", "SUPERVISOR")
-    branch_id = payload.get("branch_id") or "branch-1"
-    branch_name = "Sucursal Principal - Centro"
-    for b in branches_db:
-        if b["id"] == branch_id:
-            branch_name = b["name"]
-            break
+    role = payload.get("role", "CASHIER")
+    branch_id = payload.get("branch_id")
+    branch_name = "Acceso Global (Todas)"
+    if branch_id:
+        for b in branches_db:
+            if b["id"] == branch_id:
+                branch_name = b["name"]
+                break
 
     # Verificar si el código ya existe en la base de solicitudes
     existing = None
     for s in staff_pairings_db:
-        if s["pairing_code"].upper() == code:
+        if s["pairing_code"] == code or s["pairing_code"] == f"XM-{code}":
             existing = s
             break
 
     # Verificar si fue rechazada
     if existing and existing.get("status") == "REJECTED":
-        raise HTTPException(status_code=400, detail="Esta solicitud de vinculación fue rechazada por el administrador. Solicita o genera un nuevo código.")
+        raise HTTPException(status_code=400, detail="Esta solicitud de vinculación fue rechazada por el dueño. Solicita o genera un nuevo código.")
 
     # Verificar si expiró
     if existing and existing.get("expires_at"):
@@ -2274,9 +2345,10 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db:
         except Exception:
             pass
 
-    # Si ya existía y el propietario ya la autorizó explícitamente desde Users
+    # Si ya existía y el dueño ya la autorizó explícitamente desde Users
     if existing and existing.get("status") == "APPROVED":
-        # Sincronizar en base de datos si existe usuario
+        assigned_role = existing.get("role", role)
+        assigned_branch = existing.get("branch_id", branch_id)
         uid = payload.get("user_id") or existing.get("user_id")
         email = payload.get("email") or existing.get("email")
         if uid or email:
@@ -2290,8 +2362,8 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db:
                 user_res = await db.execute(select(UserModel).where(or_(*cond)))
                 user = user_res.scalar_one_or_none()
                 if user:
-                    user.branch_id = existing.get("branch_id", branch_id)
-                    user.role = existing.get("role", role)
+                    user.branch_id = assigned_branch
+                    user.role = assigned_role
                     user.approval_status = "APPROVED"
                     user.is_active = True
                     await db.commit()
@@ -2300,24 +2372,20 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db:
 
         return {
             "status": "APPROVED",
-            "message": f"Personal vinculado exitosamente como {existing.get('role', role)}",
-            "role": existing.get("role", role),
-            "branch_id": existing.get("branch_id", branch_id),
+            "message": f"Personal vinculado exitosamente como {assigned_role}",
+            "role": assigned_role,
+            "branch_id": assigned_branch,
             "branch_name": existing.get("branch_name", branch_name),
             "onboarding_completed": True
         }
 
-    # Si no había sido aprobada, se registra/actualiza en estado PENDING y debe esperar
-    if existing:
-        existing["role"] = role
-        existing["branch_id"] = branch_id
-        existing["branch_name"] = branch_name
-    else:
+    # Si no había sido aprobada, se registra/actualiza en estado PENDING y debe esperar al dueño
+    if not existing:
         req = {
             "pairing_code": code,
             "user_id": payload.get("user_id"),
-            "email": payload.get("email") or f"colaborador.{code.lower()}@xion.com",
-            "full_name": payload.get("full_name") or f"Colaborador ({role})",
+            "email": payload.get("email") or f"colaborador.{code}@xion.com",
+            "full_name": payload.get("full_name") or "Nuevo Colaborador",
             "role": role,
             "branch_id": branch_id,
             "branch_name": branch_name,
@@ -2330,17 +2398,14 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db:
     return {
         "status": "PENDING",
         "pairing_code": code,
-        "message": "Solicitud de vinculación enviada al Propietario. Esperando su autorización desde el panel de Usuarios.",
-        "role": role,
-        "branch_id": branch_id,
-        "branch_name": branch_name,
+        "message": "Solicitud de vinculación enviada al Dueño. Esperando autorización y asignación de rol desde Usuarios.",
         "onboarding_completed": False
     }
 
 @api_router.get("/staff/pending-requests")
 async def list_pending_staff_requests():
     """
-    Lista de solicitudes pendientes de personal para el panel del Propietario.
+    Lista de solicitudes pendientes de personal para el panel del Dueño.
     Filtra solicitudes expiradas.
     """
     verify_system_operational()
@@ -2362,43 +2427,43 @@ async def list_pending_staff_requests():
 @api_router.post("/staff/approve-request")
 async def approve_staff_request(payload: dict = Body(...), db: AsyncSession = Depends(get_db)):
     """
-    El propietario aprueba una solicitud de vinculación de personal o pre-autoriza un código.
+    El Dueño aprueba una solicitud de vinculación de personal asignando el rol y sucursal correspondientes.
     Actualiza la base de datos de usuarios si existe registro.
     """
     verify_system_operational()
-    code = (payload.get("pairing_code") or "").upper().strip()
-    if not code.startswith("XM-") and code.isdigit():
-        code = f"XM-{code}"
+    code = (payload.get("pairing_code") or "").strip().upper().replace("XM-", "").replace("XM", "")
 
-    branch_id = payload.get("branch_id") or "branch-1"
-    role = payload.get("role")
-    branch_name = "Sucursal Principal - Centro"
-    for b in branches_db:
-        if b["id"] == branch_id:
-            branch_name = b["name"]
-            break
+    branch_id = payload.get("branch_id")
+    role = payload.get("role") or "CASHIER"
+    branch_name = "Acceso Global (Todas)"
+    if branch_id and branch_id not in ("all", "global"):
+        for b in branches_db:
+            if b["id"] == branch_id:
+                branch_name = b["name"]
+                break
+    else:
+        branch_id = None
 
     target_req = None
     for s in staff_pairings_db:
-        if s["pairing_code"].upper() == code:
+        if s["pairing_code"] == code or s["pairing_code"] == f"XM-{code}":
             s["status"] = "APPROVED"
             s["branch_id"] = branch_id
             s["branch_name"] = branch_name
-            if role:
-                s["role"] = role
+            s["role"] = role
             target_req = s
             break
 
-    # Si no existía solicitud previa, el propietario está pre-creando la autorización
+    # Si no existía solicitud previa, el dueño está pre-creando la autorización
     if not target_req:
         target_req = {
             "pairing_code": code,
             "status": "APPROVED",
             "branch_id": branch_id,
             "branch_name": branch_name,
-            "role": role or "SUPERVISOR",
-            "full_name": payload.get("full_name") or f"Colaborador ({role or 'SUPERVISOR'})",
-            "email": payload.get("email") or f"colaborador.{code.lower()}@xion.com",
+            "role": role,
+            "full_name": payload.get("full_name") or f"Colaborador ({role})",
+            "email": payload.get("email") or f"colaborador.{code}@xion.com",
             "created_at": datetime.utcnow().isoformat(),
             "expires_at": (datetime.utcnow() + timedelta(minutes=60)).isoformat()
         }
@@ -2419,7 +2484,7 @@ async def approve_staff_request(payload: dict = Body(...), db: AsyncSession = De
             user = user_res.scalar_one_or_none()
             if user:
                 user.branch_id = branch_id
-                user.role = target_req.get("role") or user.role
+                user.role = role
                 user.approval_status = "APPROVED"
                 user.is_active = True
                 user.updated_at = datetime.utcnow()
@@ -2429,21 +2494,23 @@ async def approve_staff_request(payload: dict = Body(...), db: AsyncSession = De
 
     return {
         "status": "APPROVED",
-        "message": f"Personal vinculado y autorizado con éxito como {target_req.get('role', 'Colaborador')}",
+        "message": f"Personal vinculado y autorizado con éxito como {role}",
         "request": target_req
     }
 
 @api_router.post("/staff/reject-request")
 async def reject_staff_request(payload: dict = Body(...)):
-    """El propietario rechaza o descarta una solicitud de vinculación."""
+    """El Dueño rechaza o descarta una solicitud de vinculación."""
     verify_system_operational()
-    code = (payload.get("pairing_code") or "").upper().strip()
-    if not code.startswith("XM-") and code.isdigit():
-        code = f"XM-{code}"
+    code = (payload.get("pairing_code") or "").strip().upper().replace("XM-", "").replace("XM", "")
 
     for s in staff_pairings_db:
-        if s["pairing_code"].upper() == code:
+        if s["pairing_code"] == code or s["pairing_code"] == f"XM-{code}":
             s["status"] = "REJECTED"
+            s["rejected_at"] = datetime.utcnow().isoformat()
+            return {"status": "REJECTED", "message": f"Solicitud {code} descartada correctamente"}
+
+    return {"status": "REJECTED", "message": f"Solicitud {code} descartada correctamente"}
             s["rejected_at"] = datetime.utcnow().isoformat()
             return {"status": "REJECTED", "message": f"Solicitud {code} descartada correctamente"}
 

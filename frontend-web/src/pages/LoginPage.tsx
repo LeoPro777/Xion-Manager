@@ -277,7 +277,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                     <UserPlus className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
-                      placeholder="Ej. Carlos Mendoza"
+                      placeholder="Ej. Roberto Morales"
                       value={registerFullName}
                       onChange={(e) => setRegisterFullName(e.target.value)}
                       required
