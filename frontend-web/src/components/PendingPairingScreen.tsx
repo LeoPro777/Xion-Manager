@@ -348,3 +348,4 @@ export const PendingPairingScreen: React.FC<PendingPairingScreenProps> = ({
     </div>
   );
 };
+
