@@ -44,7 +44,8 @@ export const SubscriptionPaymentsListModal: React.FC<SubscriptionPaymentsListMod
     try {
       const data = await api.getPaymentReports({
         status: activeFilter === 'all' ? 'all' : activeFilter,
-        search: searchQuery
+        search: searchQuery,
+        subscription_only: true
       });
       setReports(data);
     } finally {

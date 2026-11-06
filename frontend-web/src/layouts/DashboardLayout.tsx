@@ -29,7 +29,9 @@ import {
   Moon,
   Receipt,
   Sparkles,
-  AlertTriangle
+  AlertTriangle,
+  Lock,
+  ShieldAlert
 } from 'lucide-react';
 import { api, applySystemPreferences } from '../services/api';
 import { NotificationItem, Role, User } from '../types';
@@ -227,18 +229,29 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
+              const isItemLocked = isSuspended && item.id !== 'billing';
               return (
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  title={isCollapsed ? item.label : undefined}
-                  className={`w-full flex items-center ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-3.5'} py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${isActive
+                  title={isCollapsed ? (isItemLocked ? `${item.label} (Bloqueado por suspensión)` : item.label) : undefined}
+                  className={`w-full flex items-center ${isCollapsed ? 'justify-center px-0' : 'gap-3 px-3.5'} py-2.5 rounded-xl text-sm font-medium transition-all duration-200 relative ${isActive
                       ? 'bg-gradient-to-r from-cyan-500/20 to-blue-500/10 text-cyan-400 border border-cyan-500/30 shadow-md shadow-cyan-500/5'
+                      : isItemLocked
+                      ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-900/40'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
                     }`}
                 >
-                  <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'text-cyan-400' : 'text-slate-400'}`} />
-                  {!isCollapsed && <span className="truncate">{item.label}</span>}
+                  <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'text-cyan-400' : isItemLocked ? 'text-slate-500' : 'text-slate-400'}`} />
+                  {!isCollapsed && (
+                    <div className="flex-1 flex items-center justify-between overflow-hidden">
+                      <span className="truncate">{item.label}</span>
+                      {isItemLocked && <Lock className="w-3.5 h-3.5 text-rose-500/70 shrink-0 ml-1.5" />}
+                    </div>
+                  )}
+                  {isCollapsed && isItemLocked && (
+                    <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-slate-950" />
+                  )}
                 </button>
               );
             })}
@@ -480,26 +493,69 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
 
         {/* Content Body */}
         <main className="flex-1 overflow-y-auto px-3 py-3.5 sm:p-6 pb-24 md:pb-6 bg-slate-950/80">
-          {isSuspended && (
-            <div className="mb-4 p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-rose-300 animate-in fade-in duration-200">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0">
-                  <AlertTriangle className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-rose-200">Servicio suspendido. Contacte al administrador para renovar su plan.</p>
-                  <p className="text-[11px] text-rose-400/80">El acceso a cajas POS y módulos operativos se encuentra restringido temporalmente.</p>
-                </div>
+          {isSuspended && activeTab !== 'billing' ? (
+            <div className="flex flex-col items-center justify-center min-h-[65vh] max-w-xl mx-auto text-center px-4 py-8 animate-in fade-in zoom-in-95 duration-200">
+              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-3xl bg-rose-500/10 border-2 border-rose-500/30 flex items-center justify-center text-rose-400 mb-5 shadow-xl shadow-rose-950/40">
+                <ShieldAlert className="w-8 h-8 sm:w-10 sm:h-10 animate-pulse" />
               </div>
-              <button
-                onClick={() => setActiveTab('billing')}
-                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs transition-colors shrink-0"
-              >
-                Renovar en Xion-Pay
-              </button>
+
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/10 border border-rose-500/25 text-rose-300 text-xs font-semibold uppercase tracking-wider mb-3">
+                <Lock className="w-3.5 h-3.5" />
+                <span>Servicio Suspendido</span>
+              </div>
+
+              <h2 className="text-xl sm:text-2xl font-bold text-white mb-2">
+                Acceso y Operaciones Bloqueados
+              </h2>
+
+              <p className="text-xs sm:text-sm text-slate-300 mb-4 max-w-md">
+                Tu suscripción comercial en Xion-Pay no se encuentra activa o está congelada.
+              </p>
+
+              <div className="w-full p-4 rounded-xl bg-rose-950/40 border border-rose-500/20 text-left text-xs text-rose-300/90 mb-6 max-w-md space-y-2">
+                <p className="font-semibold text-rose-200 flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>Restricciones de seguridad y exportación:</span>
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-[11px] sm:text-xs text-rose-300/80 pl-1">
+                  <li>Bloqueo total de cajas POS y sincronización de ventas.</li>
+                  <li>Prohibida la exportación y descarga de inventarios, reportes y clientes.</li>
+                  <li>Módulos operativos y compras temporalmente inhabilitados.</li>
+                </ul>
+                <p className="text-[11px] text-rose-400 pt-1.5 border-t border-rose-500/20">
+                  Para restaurar el acceso de inmediato, renueva tu suscripción desde el módulo Mi Cuenta.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('billing')}
+                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white font-bold text-sm shadow-lg shadow-rose-900/30 flex items-center justify-center gap-2 transition-all active:scale-95 min-h-[44px]"
+                >
+                  <CreditCard className="w-4 h-4" />
+                  <span>Ir a Renovar en Mi Cuenta</span>
+                </button>
+              </div>
             </div>
+          ) : (
+            <>
+              {isSuspended && activeTab === 'billing' && (
+                <div className="mb-4 p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-rose-300 animate-in fade-in duration-200">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0">
+                      <AlertTriangle className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-rose-200">Servicio suspendido en Xion-Pay.</p>
+                      <p className="text-[11px] text-rose-400/80">Estás en el módulo habilitado para consignar tu pago y reactivar tus licencias.</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {children}
+            </>
           )}
-          {children}
         </main>
 
         {/* Notifications Slide-Out Drawer */}
@@ -673,13 +729,14 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
                 setActiveTab('dashboard');
                 setShowMobileMoreSheet(false);
               }}
-              className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all ${activeTab === 'dashboard'
+              className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all relative ${activeTab === 'dashboard'
                   ? 'text-cyan-400 font-semibold'
-                  : 'text-slate-400 hover:text-slate-200'
+                  : isSuspended ? 'text-slate-500' : 'text-slate-400 hover:text-slate-200'
                 }`}
             >
-              <div className={`p-1 rounded-lg ${activeTab === 'dashboard' ? 'bg-cyan-500/15' : ''}`}>
+              <div className={`p-1 rounded-lg relative ${activeTab === 'dashboard' ? 'bg-cyan-500/15' : ''}`}>
                 <LayoutDashboard className="w-5 h-5" />
+                {isSuspended && <span className="absolute top-0 right-0 w-1.5 h-1.5 rounded-full bg-rose-500" />}
               </div>
               <span className="text-[10px] tracking-tight mt-0.5 truncate max-w-[56px]">Panel</span>
             </button>
@@ -690,13 +747,14 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
                 setActiveTab('branches');
                 setShowMobileMoreSheet(false);
               }}
-              className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all ${activeTab === 'branches'
+              className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all relative ${activeTab === 'branches'
                   ? 'text-cyan-400 font-semibold'
-                  : 'text-slate-400 hover:text-slate-200'
+                  : isSuspended ? 'text-slate-500' : 'text-slate-400 hover:text-slate-200'
                 }`}
             >
-              <div className={`p-1 rounded-lg ${activeTab === 'branches' ? 'bg-cyan-500/15' : ''}`}>
+              <div className={`p-1 rounded-lg relative ${activeTab === 'branches' ? 'bg-cyan-500/15' : ''}`}>
                 <Store className="w-5 h-5" />
+                {isSuspended && <span className="absolute top-0 right-0 w-1.5 h-1.5 rounded-full bg-rose-500" />}
               </div>
               <span className="text-[10px] tracking-tight mt-0.5 truncate max-w-[56px]">Sucursales</span>
             </button>
@@ -707,13 +765,14 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
                 setActiveTab('inventory');
                 setShowMobileMoreSheet(false);
               }}
-              className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all ${activeTab === 'inventory'
+              className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all relative ${activeTab === 'inventory'
                   ? 'text-cyan-400 font-semibold'
-                  : 'text-slate-400 hover:text-slate-200'
+                  : isSuspended ? 'text-slate-500' : 'text-slate-400 hover:text-slate-200'
                 }`}
             >
-              <div className={`p-1 rounded-lg ${activeTab === 'inventory' ? 'bg-cyan-500/15' : ''}`}>
+              <div className={`p-1 rounded-lg relative ${activeTab === 'inventory' ? 'bg-cyan-500/15' : ''}`}>
                 <Package className="w-5 h-5" />
+                {isSuspended && <span className="absolute top-0 right-0 w-1.5 h-1.5 rounded-full bg-rose-500" />}
               </div>
               <span className="text-[10px] tracking-tight mt-0.5 truncate max-w-[56px]">Inventario</span>
             </button>
@@ -724,13 +783,14 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
                 setActiveTab('purchases');
                 setShowMobileMoreSheet(false);
               }}
-              className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all ${activeTab === 'purchases'
+              className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-all relative ${activeTab === 'purchases'
                   ? 'text-cyan-400 font-semibold'
-                  : 'text-slate-400 hover:text-slate-200'
+                  : isSuspended ? 'text-slate-500' : 'text-slate-400 hover:text-slate-200'
                 }`}
             >
-              <div className={`p-1 rounded-lg ${activeTab === 'purchases' ? 'bg-cyan-500/15' : ''}`}>
+              <div className={`p-1 rounded-lg relative ${activeTab === 'purchases' ? 'bg-cyan-500/15' : ''}`}>
                 <ShoppingCart className="w-5 h-5" />
+                {isSuspended && <span className="absolute top-0 right-0 w-1.5 h-1.5 rounded-full bg-rose-500" />}
               </div>
               <span className="text-[10px] tracking-tight mt-0.5 truncate max-w-[56px]">Compras</span>
             </button>
@@ -748,9 +808,11 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
                   : ''
                 }`}>
                 <Menu className="w-5 h-5" />
-                {!['dashboard', 'branches', 'inventory', 'purchases'].includes(activeTab) && (
+                {isSuspended ? (
+                  <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-slate-950 animate-pulse" />
+                ) : !['dashboard', 'branches', 'inventory', 'purchases'].includes(activeTab) ? (
                   <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-cyan-400 ring-2 ring-slate-950" />
-                )}
+                ) : null}
               </div>
               <span className="text-[10px] tracking-tight mt-0.5 truncate max-w-[56px]">Más</span>
             </button>
@@ -784,17 +846,18 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
               {/* Grid of Secondary Modules */}
               <div className="grid grid-cols-2 gap-2 text-xs">
                 {[
+                  { id: 'billing', label: 'Mi Cuenta (Renovar)', icon: CreditCard, highlight: isSuspended },
                   { id: 'payment-methods', label: 'Métodos de Pago', icon: Coins },
                   { id: 'payment-reports', label: 'Reportes de Pago', icon: Receipt },
                   { id: 'users', label: 'Usuarios y Accesos', icon: Users },
                   { id: 'audit', label: 'Auditoría y Bitácoras', icon: ShieldCheck },
                   { id: 'reports', label: 'Centro de Reportes', icon: FileSpreadsheet },
-                  { id: 'billing', label: 'Mi Cuenta', icon: CreditCard },
                   { id: 'settings', label: 'Configuraciones', icon: Settings },
                   { id: 'preferences', label: 'Preferencias', icon: Palette },
                 ].map((item) => {
                   const Icon = item.icon;
                   const isActive = activeTab === item.id;
+                  const isItemLocked = isSuspended && item.id !== 'billing';
                   return (
                     <button
                       key={item.id}
@@ -802,15 +865,28 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
                         setActiveTab(item.id);
                         setShowMobileMoreSheet(false);
                       }}
-                      className={`flex items-center gap-2.5 p-3 rounded-xl border transition-all text-left ${isActive
+                      className={`flex items-center gap-2.5 p-3 rounded-xl border transition-all text-left relative ${isActive
                           ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300 font-semibold shadow-sm'
+                          : item.highlight
+                          ? 'bg-rose-500/15 border-rose-500/40 text-rose-300 font-bold'
+                          : isItemLocked
+                          ? 'bg-slate-900/40 border-slate-800/60 text-slate-500'
                           : 'bg-slate-900/60 border-slate-800/80 text-slate-300 hover:bg-slate-800/80'
                         }`}
                     >
-                      <div className={`p-1.5 rounded-lg shrink-0 ${isActive ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-800 text-slate-400'}`}>
+                      <div className={`p-1.5 rounded-lg shrink-0 ${
+                        isActive
+                          ? 'bg-cyan-500/20 text-cyan-300'
+                          : item.highlight
+                          ? 'bg-rose-500/20 text-rose-300'
+                          : isItemLocked
+                          ? 'bg-slate-800/50 text-slate-500'
+                          : 'bg-slate-800 text-slate-400'
+                      }`}>
                         <Icon className="w-4 h-4" />
                       </div>
-                      <span className="text-xs font-medium leading-tight truncate">{item.label}</span>
+                      <span className="text-xs font-medium leading-tight truncate flex-1">{item.label}</span>
+                      {isItemLocked && <Lock className="w-3.5 h-3.5 text-rose-500/60 shrink-0" />}
                     </button>
                   );
                 })}

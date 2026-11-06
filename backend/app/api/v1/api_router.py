@@ -1573,6 +1573,7 @@ async def logout(
 # 1. Dashboard
 @api_router.get("/dashboard/metrics")
 async def get_dashboard_metrics(branch_id: Optional[str] = None):
+    verify_system_operational()
     registers = cash_registers_db
     if branch_id and branch_id != "all":
         registers = [r for r in registers if r["branch_id"] == branch_id]
@@ -1627,11 +1628,13 @@ def recalculate_branch_cash_registers():
 
 @api_router.get("/branches")
 async def list_branches():
+    verify_system_operational()
     recalculate_branch_cash_registers()
     return branches_db
 
 @api_router.get("/branches/{branch_id}")
 async def get_branch(branch_id: str):
+    verify_system_operational()
     for b in branches_db:
         if b["id"] == branch_id:
             return b
@@ -1684,6 +1687,7 @@ async def delete_branch(branch_id: str):
 
 @api_router.get("/cash-registers")
 async def list_cash_registers(branch_id: Optional[str] = None):
+    verify_system_operational()
     if branch_id:
         return [r for r in cash_registers_db if r["branch_id"] == branch_id]
     return cash_registers_db
@@ -1725,6 +1729,7 @@ async def create_cash_register(payload: CashRegisterCreate):
 
 @api_router.put("/cash-registers/{register_id}")
 async def update_cash_register(register_id: str, payload: CashRegisterUpdate):
+    verify_system_operational()
     for i, r in enumerate(cash_registers_db):
         if r["id"] == register_id:
             data = payload.model_dump(exclude_unset=True)
@@ -1740,6 +1745,7 @@ async def update_cash_register(register_id: str, payload: CashRegisterUpdate):
 
 @api_router.delete("/cash-registers/{register_id}")
 async def delete_cash_register(register_id: str):
+    verify_system_operational()
     global cash_registers_db
     cash_registers_db = [r for r in cash_registers_db if r["id"] != register_id]
     recalculate_branch_cash_registers()
@@ -1776,10 +1782,12 @@ shrinkage_db: List[dict] = []
 
 @api_router.get("/inventory/categories")
 async def list_categories():
+    verify_system_operational()
     return categories_db
 
 @api_router.post("/inventory/categories", status_code=status.HTTP_201_CREATED)
 async def create_category(payload: CategoryCreate):
+    verify_system_operational()
     full_path = payload.name
     if payload.parent_id:
         parent = next((c for c in categories_db if c["id"] == payload.parent_id), None)
@@ -1797,6 +1805,7 @@ async def create_category(payload: CategoryCreate):
 
 @api_router.get("/inventory/shrinkage")
 async def list_shrinkage():
+    verify_system_operational()
     return shrinkage_db
 
 @api_router.post("/inventory/adjust-stock")
@@ -1817,6 +1826,7 @@ async def adjust_stock(payload: StockAdjustmentDTO):
 
 @api_router.get("/inventory/products/{combo_id}/components")
 async def get_combo_components(combo_id: str):
+    verify_system_operational()
     prod = next((p for p in inventory_db if p["id"] == combo_id or p.get("product_id") == combo_id), None)
     if not prod:
         raise HTTPException(status_code=404, detail="Combo no encontrado")
@@ -1824,6 +1834,7 @@ async def get_combo_components(combo_id: str):
 
 @api_router.put("/inventory/products/{combo_id}/components")
 async def update_combo_components(combo_id: str, components: List[dict]):
+    verify_system_operational()
     for p in inventory_db:
         if p["id"] == combo_id or p.get("product_id") == combo_id:
             p["combo_items"] = components
@@ -1833,16 +1844,19 @@ async def update_combo_components(combo_id: str, components: List[dict]):
 @api_router.get("/inventory")
 @api_router.get("/inventory/products")
 async def list_products(branch_id: Optional[str] = None):
+    verify_system_operational()
     if branch_id:
         return [p for p in inventory_db if p.get("branch_id") == branch_id or not p.get("branch_id")]
     return inventory_db
 
 @api_router.get("/inventory/{branch_id}")
 async def get_branch_inventory(branch_id: str):
+    verify_system_operational()
     return [p for p in inventory_db if p.get("branch_id") == branch_id or not p.get("branch_id")]
 
 @api_router.post("/inventory/products", status_code=status.HTTP_201_CREATED)
 async def create_product(payload: ProductCreate):
+    verify_system_operational()
     new_p = {
         "id": f"inv-{int(datetime.utcnow().timestamp() * 1000)}",
         "product_id": f"p-{int(datetime.utcnow().timestamp())}",
@@ -1870,6 +1884,7 @@ async def create_product(payload: ProductCreate):
 
 @api_router.put("/inventory/products/{product_id}")
 async def update_product(product_id: str, payload: ProductUpdate):
+    verify_system_operational()
     for i, p in enumerate(inventory_db):
         if p["id"] == product_id or p.get("product_id") == product_id:
             data = payload.model_dump(exclude_unset=True)
@@ -1881,6 +1896,7 @@ async def update_product(product_id: str, payload: ProductUpdate):
 
 @api_router.delete("/inventory/products/{product_id}")
 async def delete_product(product_id: str):
+    verify_system_operational()
     global inventory_db
     inventory_db = [p for p in inventory_db if p["id"] != product_id and p.get("product_id") != product_id]
     return {"message": "Producto eliminado exitosamente"}
@@ -1907,6 +1923,7 @@ async def register_shrinkage(payload: ShrinkageCreate):
 
 @api_router.get("/inventory/transfers")
 async def list_transfers():
+    verify_system_operational()
     return transfers_db
 
 @api_router.post("/inventory/transfers", status_code=status.HTTP_201_CREATED)
@@ -1948,10 +1965,12 @@ purchases_db: List[dict] = []
 
 @api_router.get("/suppliers")
 async def list_suppliers():
+    verify_system_operational()
     return suppliers_db
 
 @api_router.post("/suppliers", status_code=status.HTTP_201_CREATED)
 async def create_supplier(payload: SupplierCreate):
+    verify_system_operational()
     new_s = {
         "id": f"sup-{int(datetime.utcnow().timestamp())}",
         "name": payload.name,
@@ -1970,6 +1989,7 @@ async def create_supplier(payload: SupplierCreate):
 
 @api_router.put("/suppliers/{supplier_id}")
 async def update_supplier(supplier_id: str, payload: SupplierUpdate):
+    verify_system_operational()
     for i, s in enumerate(suppliers_db):
         if s["id"] == supplier_id:
             suppliers_db[i].update(payload.model_dump(exclude_unset=True))
@@ -1978,12 +1998,14 @@ async def update_supplier(supplier_id: str, payload: SupplierUpdate):
 
 @api_router.delete("/suppliers/{supplier_id}")
 async def delete_supplier(supplier_id: str):
+    verify_system_operational()
     global suppliers_db
     suppliers_db = [s for s in suppliers_db if s["id"] != supplier_id]
     return {"message": "Proveedor eliminado"}
 
 @api_router.get("/purchases")
 async def list_purchases(supplier_id: Optional[str] = None, branch_id: Optional[str] = None):
+    verify_system_operational()
     res = purchases_db
     if supplier_id:
         res = [p for p in res if p.get("supplier_id") == supplier_id]
@@ -1995,10 +2017,12 @@ supplier_ledger_db: List[dict] = []
 
 @api_router.get("/suppliers/{supplier_id}/ledger")
 async def get_supplier_ledger(supplier_id: str):
+    verify_system_operational()
     return [l for l in supplier_ledger_db if l["supplier_id"] == supplier_id]
 
 @api_router.get("/purchases/{purchase_id}")
 async def get_purchase_detail(purchase_id: str):
+    verify_system_operational()
     for p in purchases_db:
         if p["id"] == purchase_id:
             return p
@@ -2083,6 +2107,7 @@ async def create_purchase(payload: PurchaseCreate):
 
 @api_router.post("/purchases/{purchase_id}/pay")
 async def pay_purchase_debt(purchase_id: str, payload: PurchasePayDTO):
+    verify_system_operational()
     for p in purchases_db:
         if p["id"] == purchase_id:
             pay_amt = min(payload.amount_usd, p.get("pending_amount_usd", 0.0))
@@ -2114,6 +2139,7 @@ async def pay_purchase_debt(purchase_id: str, payload: PurchasePayDTO):
 # 5. Users & Approvals
 @api_router.get("/users")
 async def list_users():
+    verify_system_operational()
     return [
         {
             "id": "usr-1",
@@ -2135,6 +2161,7 @@ async def list_users():
 
 @api_router.post("/users/approval")
 async def user_approval(user_id: str = Body(...), status_val: str = Body(...)):
+    verify_system_operational()
     return {
         "user_id": user_id,
         "approval_status": status_val,
@@ -2358,6 +2385,7 @@ async def list_pending_staff_requests():
     Lista de solicitudes pendientes de personal para el panel del Propietario.
     Filtra solicitudes expiradas.
     """
+    verify_system_operational()
     now = datetime.utcnow()
     valid_requests = []
     for s in staff_pairings_db:
@@ -2379,6 +2407,7 @@ async def approve_staff_request(payload: dict = Body(...), db: AsyncSession = De
     El propietario aprueba una solicitud de vinculación de personal o pre-autoriza un código.
     Actualiza la base de datos de usuarios si existe registro.
     """
+    verify_system_operational()
     code = (payload.get("pairing_code") or "").upper().strip()
     if not code.startswith("XM-") and code.isdigit():
         code = f"XM-{code}"
@@ -2449,6 +2478,7 @@ async def approve_staff_request(payload: dict = Body(...), db: AsyncSession = De
 @api_router.post("/staff/reject-request")
 async def reject_staff_request(payload: dict = Body(...)):
     """El propietario rechaza o descarta una solicitud de vinculación."""
+    verify_system_operational()
     code = (payload.get("pairing_code") or "").upper().strip()
     if not code.startswith("XM-") and code.isdigit():
         code = f"XM-{code}"
@@ -2465,6 +2495,7 @@ async def reject_staff_request(payload: dict = Body(...)):
 # 6. Audit & Cash Sessions
 @api_router.get("/audit/logs")
 async def get_audit_logs():
+    verify_system_operational()
     return [
         {
             "id": "log-1",
@@ -2480,6 +2511,7 @@ async def get_audit_logs():
 
 @api_router.get("/audit/cash-sessions")
 async def get_cash_sessions():
+    verify_system_operational()
     return [
         {
             "id": "sess-01",
@@ -2708,9 +2740,16 @@ async def list_payment_reports(
     status_filter: Optional[str] = Query(None, alias="status"),
     currency_filter: Optional[str] = Query(None, alias="currency"),
     payment_method: Optional[str] = None,
-    search: Optional[str] = None
+    search: Optional[str] = None,
+    subscription_only: bool = False
 ):
+    if not is_system_operational() and not subscription_only:
+        verify_system_operational()
+
     results = payment_reports_db
+    if not is_system_operational() or subscription_only:
+        results = [r for r in results if (r.get("order_id") or "").startswith("SUB-") or "Renovación" in (r.get("concept") or "")]
+
     if status_filter and status_filter.upper() != "ALL":
         results = [r for r in results if r["status"].lower() == status_filter.lower()]
     if currency_filter and currency_filter.upper() != "ALL":
@@ -2734,6 +2773,11 @@ async def create_payment_report(payload: PaymentReportCreate):
     # Rule 1: Reference Uniqueness Guard
     clean_ref = (payload.reference_number or "").strip()
     clean_bank = (payload.origin_bank or "").strip().lower()
+
+    is_sub_renewal = (payload.order_id and payload.order_id.startswith("SUB-")) or \
+                     (payload.concept and "Renovación Suscripción" in payload.concept)
+    if not is_sub_renewal:
+        verify_system_operational()
     
     if clean_ref:
         for r in payment_reports_db:
@@ -2760,9 +2804,6 @@ async def create_payment_report(payload: PaymentReportCreate):
         amount_base_equiv = round(payload.amount_paid, 4)
 
     # Dispatch payment report to Xion-Pay pasarela (Client -> Xion-Pay)
-    is_sub_renewal = (payload.order_id and payload.order_id.startswith("SUB-")) or \
-                     (payload.concept and "Renovación Suscripción" in payload.concept)
-    
     xion_pay_report_id = None
     if is_sub_renewal:
         xion_res = await XionPayService.report_payment({
@@ -2821,6 +2862,7 @@ async def create_payment_report(payload: PaymentReportCreate):
 
 @api_router.post("/payment-reports/{report_id}/verify", response_model=PaymentReportItemSchema)
 async def verify_payment_report(report_id: str, payload: PaymentReportVerifySchema):
+    verify_system_operational()
     report = next((r for r in payment_reports_db if r["id"] == report_id), None)
     if not report:
         raise HTTPException(status_code=404, detail="Reporte de pago no encontrado")
@@ -2836,6 +2878,7 @@ async def verify_payment_report(report_id: str, payload: PaymentReportVerifySche
 
 @api_router.post("/payment-reports/{report_id}/reject", response_model=PaymentReportItemSchema)
 async def reject_payment_report(report_id: str, payload: PaymentReportRejectSchema):
+    verify_system_operational()
     report = next((r for r in payment_reports_db if r["id"] == report_id), None)
     if not report:
         raise HTTPException(status_code=404, detail="Reporte de pago no encontrado")
@@ -3018,6 +3061,7 @@ async def get_payment_method(pm_id: int):
 @api_router.post("/payment-methods", response_model=PaymentMethodResponse, status_code=status.HTTP_201_CREATED)
 @api_router.post("/payment-methods/", response_model=PaymentMethodResponse, status_code=status.HTTP_201_CREATED)
 async def create_payment_method(payload: PaymentMethodCreate):
+    verify_system_operational()
     for pm in payment_methods_db:
         if pm["code"].strip().lower() == payload.code.strip().lower():
             raise HTTPException(status_code=400, detail="El código de método de pago ya existe.")
@@ -3043,6 +3087,7 @@ async def create_payment_method(payload: PaymentMethodCreate):
 
 @api_router.put("/payment-methods/{pm_id}", response_model=PaymentMethodResponse)
 async def update_payment_method(pm_id: int, payload: PaymentMethodUpdate):
+    verify_system_operational()
     for i, pm in enumerate(payment_methods_db):
         if pm["id"] == pm_id:
             if pm.get("is_system", False):
@@ -3071,6 +3116,7 @@ async def update_payment_method(pm_id: int, payload: PaymentMethodUpdate):
 
 @api_router.delete("/payment-methods/{pm_id}")
 async def delete_payment_method(pm_id: int):
+    verify_system_operational()
     global payment_methods_db
     for i, pm in enumerate(payment_methods_db):
         if pm["id"] == pm_id:

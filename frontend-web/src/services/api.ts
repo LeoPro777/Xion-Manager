@@ -1746,13 +1746,14 @@ export const api = {
   },
 
   // 12. Venezuelan Payment Reports (Independent Module)
-  async getPaymentReports(filters?: { status?: string; currency?: string; payment_method?: string; search?: string }): Promise<PaymentReportItem[]> {
+  async getPaymentReports(filters?: { status?: string; currency?: string; payment_method?: string; search?: string; subscription_only?: boolean }): Promise<PaymentReportItem[]> {
     try {
       const params = new URLSearchParams();
       if (filters?.status && filters.status !== 'all') params.append('status', filters.status);
       if (filters?.currency && filters.currency !== 'all') params.append('currency', filters.currency);
       if (filters?.payment_method && filters.payment_method !== 'all') params.append('payment_method', filters.payment_method);
       if (filters?.search) params.append('search', filters.search);
+      if (filters?.subscription_only) params.append('subscription_only', 'true');
 
       const qs = params.toString() ? `?${params.toString()}` : '';
       const res = await fetch(`/api/v1/payment-reports${qs}`);
