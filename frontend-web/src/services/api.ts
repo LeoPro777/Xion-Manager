@@ -44,52 +44,13 @@ let mockTransfers: StockTransfer[] = [];
 
 let mockShrinkages: InventoryShrinkage[] = [];
 
-let mockCategories: CategoryItem[] = [
-  { id: 'cat-1', name: 'Víveres', description: 'Alimentos no perecederos y despensa', color: '#3B82F6', icon: 'ShoppingBag', is_active: true, full_path: 'Víveres' },
-  { id: 'cat-2', name: 'Bebidas y Licores', description: 'Refrescos, jugos, agua mineral y licores', color: '#10B981', icon: 'Coffee', is_active: true, full_path: 'Bebidas y Licores' },
-  { id: 'cat-3', name: 'Combos y Promociones', description: 'Paquetes de productos armados', color: '#8B5CF6', icon: 'PackageCheck', is_active: true, full_path: 'Combos y Promociones' },
-  { id: 'cat-4', name: 'Limpieza y Hogar', description: 'Detergentes, desinfectantes y cuidado del hogar', color: '#EC4899', icon: 'Sparkles', is_active: true, full_path: 'Limpieza y Hogar' }
-];
+let mockCategories: CategoryItem[] = [];
 
 let mockSupplierLedger: Record<string, SupplierPayableLedgerItem[]> = {};
 
-let mockBranches: Branch[] = [
-  {
-    id: 'branch-1',
-    business_id: 'biz-101',
-    name: 'Sucursal Principal',
-    address: 'Sede Principal',
-    latitude: 10.6417,
-    longitude: -71.6125,
-    phone: '+58 414-0000000',
-    manager_user_id: 'usr-admin-01',
-    manager_name: 'Administrador',
-    active_cash_registers_count: 1,
-    is_active: true,
-    created_at: '2026-01-01T00:00:00Z'
-  }
-];
+let mockBranches: Branch[] = [];
 
-let mockCashRegisters: CashRegister[] = [
-  {
-    id: 'reg-01',
-    branch_id: 'branch-1',
-    branch_name: 'Sucursal Principal',
-    name: 'Caja 01',
-    hardware_uuid: 'HW-POS-01',
-    status: 'CLOSED',
-    is_active: true,
-    current_operator: undefined,
-    today_sales_total: 0.00,
-    allowed_user_ids: ['usr-admin-01'],
-    payment_methods: ['CASH_USD', 'CASH_BS', 'PAGO_MOVIL', 'DEBIT_CARD'],
-    latitude: 10.6417,
-    longitude: -71.6125,
-    location_name: 'Sede Principal',
-    created_at: '2026-01-01T00:00:00Z',
-    device_paired: false
-  }
-];
+let mockCashRegisters: CashRegister[] = [];
 
 let mockPaymentMethods: PaymentMethod[] = [
   {
@@ -695,14 +656,34 @@ export const api = {
 
   // 2. Branches & Cash Registers
   async getBranches(): Promise<Branch[]> {
-    mockBranches = mockBranches.map(b => ({
-      ...b,
-      active_cash_registers_count: mockCashRegisters.filter(r => r.branch_id === b.id && r.is_active).length
-    }));
+    try {
+      const res = await fetch('/api/v1/branches');
+      if (res.ok) {
+        const data = await res.json();
+        mockBranches = data;
+        return data;
+      }
+    } catch {
+      // offline fallback
+    }
     return [...mockBranches];
   },
 
   async createBranch(branchData: Partial<Branch>): Promise<Branch> {
+    try {
+      const res = await fetch('/api/v1/branches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(branchData)
+      });
+      if (res.ok) {
+        const newBranch = await res.json();
+        mockBranches = [...mockBranches, newBranch];
+        return newBranch;
+      }
+    } catch {
+      // offline fallback
+    }
     const newBranch: Branch = {
       id: `branch-${Date.now()}`,
       business_id: 'biz-101',
@@ -722,16 +703,46 @@ export const api = {
   },
 
   async updateBranch(id: string, branchData: Partial<Branch>): Promise<Branch> {
+    try {
+      const res = await fetch(`/api/v1/branches/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(branchData)
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        mockBranches = mockBranches.map(b => b.id === id ? { ...b, ...updated } : b);
+        return updated;
+      }
+    } catch {
+      // offline fallback
+    }
     mockBranches = mockBranches.map(b => b.id === id ? { ...b, ...branchData } : b);
     return mockBranches.find(b => b.id === id) || (mockBranches[0] as Branch);
   },
 
   async deleteBranch(id: string): Promise<void> {
+    try {
+      await fetch(`/api/v1/branches/${id}`, { method: 'DELETE' });
+    } catch {
+      // offline fallback
+    }
     mockBranches = mockBranches.filter(b => b.id !== id);
     mockCashRegisters = mockCashRegisters.filter(r => r.branch_id !== id);
   },
 
   async getCashRegisters(branchId?: string): Promise<CashRegister[]> {
+    try {
+      const url = branchId && branchId !== 'all' ? `/api/v1/cash-registers?branch_id=${branchId}` : '/api/v1/cash-registers';
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        mockCashRegisters = data;
+        return data;
+      }
+    } catch {
+      // offline fallback
+    }
     if (branchId && branchId !== 'all') {
       return mockCashRegisters.filter(r => r.branch_id === branchId);
     }
@@ -739,11 +750,25 @@ export const api = {
   },
 
   async createCashRegister(registerData: Partial<CashRegister>): Promise<CashRegister> {
+    try {
+      const res = await fetch('/api/v1/cash-registers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(registerData)
+      });
+      if (res.ok) {
+        const created = await res.json();
+        mockCashRegisters = [...mockCashRegisters, created];
+        return created;
+      }
+    } catch {
+      // offline fallback
+    }
     const branch = mockBranches.find(b => b.id === registerData.branch_id);
     const newRegister: CashRegister = {
       id: `reg-${Date.now()}`,
       branch_id: registerData.branch_id || 'branch-1',
-      branch_name: branch?.name || 'Sucursal Principal - Centro',
+      branch_name: branch?.name || 'Sucursal Principal',
       name: registerData.name || 'Nueva Caja Registradora',
       hardware_uuid: registerData.hardware_uuid || `HW-POS-${Date.now().toString().slice(-4)}`,
       status: 'CLOSED',
@@ -762,6 +787,20 @@ export const api = {
   },
 
   async updateCashRegister(id: string, registerData: Partial<CashRegister>): Promise<CashRegister> {
+    try {
+      const res = await fetch(`/api/v1/cash-registers/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(registerData)
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        mockCashRegisters = mockCashRegisters.map(r => r.id === id ? { ...r, ...updated } : r);
+        return updated;
+      }
+    } catch {
+      // offline fallback
+    }
     mockCashRegisters = mockCashRegisters.map(r => {
       if (r.id === id) {
         const branch = mockBranches.find(b => b.id === (registerData.branch_id || r.branch_id));
@@ -777,10 +816,27 @@ export const api = {
   },
 
   async deleteCashRegister(id: string): Promise<void> {
+    try {
+      await fetch(`/api/v1/cash-registers/${id}`, { method: 'DELETE' });
+    } catch {
+      // offline fallback
+    }
     mockCashRegisters = mockCashRegisters.filter(r => r.id !== id);
   },
 
-  async toggleCashRegisterStatus(id: string, operatorName: string = 'Carlos Mendoza'): Promise<CashRegister> {
+  async toggleCashRegisterStatus(id: string, operatorName: string = 'Operador POS'): Promise<CashRegister> {
+    try {
+      const res = await fetch(`/api/v1/cash-registers/${id}/toggle-status?operator_name=${encodeURIComponent(operatorName)}`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        mockCashRegisters = mockCashRegisters.map(r => r.id === id ? updated : r);
+        return updated;
+      }
+    } catch {
+      // offline fallback
+    }
     const reg = mockCashRegisters.find(r => r.id === id);
     if (reg) {
       if (reg.status === 'OPEN') {
@@ -1430,114 +1486,60 @@ export const api = {
 
   // 5. Users & Approvals
   async getUsers(): Promise<User[]> {
-    return [
-      {
-        id: 'usr-1',
-        business_id: 'biz-101',
-        email: 'juan.delgado@xion.com',
-        full_name: 'Juan Delgado',
-        phone: '+58 414-1112233',
-        role: 'OWNER',
-        approval_status: 'APPROVED',
-        is_active: true,
-        created_at: '2026-01-01'
-      },
-      {
-        id: 'usr-2',
-        business_id: 'biz-101',
-        branch_id: 'branch-1',
-        branch_name: 'Sucursal Principal - Centro',
-        email: 'carlos.mendoza@xion.com',
-        full_name: 'Carlos Mendoza',
-        phone: '+58 412-2223344',
-        role: 'ADMIN',
-        approval_status: 'APPROVED',
-        is_active: true,
-        created_at: '2026-02-15'
-      },
-      {
-        id: 'usr-3',
-        business_id: 'biz-101',
-        branch_id: 'branch-2',
-        branch_name: 'Sucursal Norte - CC Lago Mall',
-        email: 'maria.silva@xion.com',
-        full_name: 'María Silva',
-        phone: '+58 424-3334455',
-        role: 'BRANCH_MANAGER',
-        approval_status: 'APPROVED',
-        is_active: true,
-        created_at: '2026-03-22'
-      },
-      {
-        id: 'usr-4',
-        business_id: 'biz-101',
-        branch_id: 'branch-1',
-        branch_name: 'Sucursal Principal - Centro',
-        email: 'pedro.cajero@xion.com',
-        full_name: 'Pedro Ramos (Nuevo Cajero)',
-        phone: '+58 416-5556677',
-        role: 'CASHIER',
-        approval_status: 'PENDING',
-        is_active: false,
-        created_at: '2026-10-07'
+    try {
+      const res = await fetch('/api/v1/users');
+      if (res.ok) {
+        return await res.json();
       }
-    ];
+    } catch {
+      // offline fallback
+    }
+    return [];
   },
 
-  async updateUserApproval(_userId: string, status: 'APPROVED' | 'REJECTED'): Promise<{ message: string }> {
+  async updateUserApproval(userId: string, status: 'APPROVED' | 'REJECTED'): Promise<{ message: string }> {
+    try {
+      const res = await fetch('/api/v1/users/approval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, status })
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // offline fallback
+    }
     return {
       message: status === 'APPROVED' 
-        ? 'El usuario ha sido aprobado exitosamente y ya puede operar en Xion-Manager y Xion-POS.' 
+        ? 'El usuario ha sido aprobado exitosamente.' 
         : 'La solicitud de usuario ha sido rechazada.'
     };
   },
 
   // 6. Audit & Cash Sessions
   async getAuditLogs(): Promise<AuditLogItem[]> {
-    return [
-      {
-        id: 'log-1',
-        timestamp: '2026-10-08 13:45:10',
-        user_name: 'Carlos Mendoza',
-        role: 'ADMIN',
-        module: 'CONFIGURACION',
-        action_type: 'EXCHANGE_RATE_UPDATE',
-        description: 'Actualización de Tasa Cambiaria Oficial a 37.50 Bs/USD. Sincronizado con terminales POS.',
-        branch_name: 'Global',
-        ip_address: '192.168.1.45'
-      },
-      {
-        id: 'log-2',
-        timestamp: '2026-10-08 12:30:00',
-        user_name: 'María Silva',
-        role: 'BRANCH_MANAGER',
-        module: 'CAJAS',
-        action_type: 'CASH_REGISTER_OPEN',
-        description: 'Apertura de turno en Caja #02 con fondo inicial de $50.00',
-        branch_name: 'Sucursal Norte',
-        cash_register_name: 'Caja 02',
-        ip_address: '192.168.2.11'
+    try {
+      const res = await fetch('/api/v1/audit/logs');
+      if (res.ok) {
+        return await res.json();
       }
-    ];
+    } catch {
+      // offline fallback
+    }
+    return [];
   },
 
   async getCashSessions(): Promise<CashSessionSyncItem[]> {
-    return [
-      {
-        id: 'sess-01',
-        cash_register_name: 'Caja 01 - Principal',
-        branch_name: 'Sucursal Principal',
-        opened_by: 'Carlos Mendoza',
-        opened_at: '2026-10-08 08:00',
-        closed_at: '2026-10-08 16:00',
-        closed_by: 'Carlos Mendoza',
-        initial_cash: 100.00,
-        declared_cash: 540.00,
-        calculated_cash: 540.00,
-        difference: 0.00,
-        status: 'CLOSED'
+    try {
+      const res = await fetch('/api/v1/audit/cash-sessions');
+      if (res.ok) {
+        return await res.json();
       }
-    ];
+    } catch {
+      // offline fallback
+    }
+    return [];
   },
 
   // 7. Reports
@@ -1545,24 +1547,22 @@ export const api = {
     return {
       title: reportType,
       generated_at: new Date().toISOString(),
-      rows_count: 120,
-      total_summary: '$18,450.00'
+      rows_count: 0,
+      total_summary: '$0.00'
     };
   },
 
   // 8. Notifications
   async getNotifications(): Promise<NotificationItem[]> {
-    return [
-      {
-        id: 'notif-1',
-        timestamp: 'Hace 5 min',
-        severity: 'URGENT',
-        title: 'Descuadre de Caja Detectado',
-        message: 'Caja 01 en Sucursal Norte cerró con diferencia en arqueo ciego.',
-        read: false,
-        link_tab: 'audit'
+    try {
+      const res = await fetch('/api/v1/notifications');
+      if (res.ok) {
+        return await res.json();
       }
-    ];
+    } catch {
+      // offline fallback
+    }
+    return [];
   },
 
   // 9. Billing & Xion-Pay

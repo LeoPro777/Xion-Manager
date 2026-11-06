@@ -525,8 +525,15 @@ export const BranchesPage: React.FC = () => {
       ======================================================== */}
       {activeTab === 'branches' && (
         viewMode === 'card' ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {filteredBranches.map(b => (
+          filteredBranches.length === 0 ? (
+            <div className="glass-panel p-12 text-center rounded-2xl border border-slate-800 text-slate-400">
+              <Store className="w-10 h-10 mx-auto mb-3 text-slate-600" />
+              <p className="text-sm font-semibold text-slate-300">No hay sucursales creadas</p>
+              <p className="text-xs text-slate-500 mt-1">Presiona "Nueva Sucursal" para registrar tu primer punto de venta.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {filteredBranches.map(b => (
               <div key={b.id} className="glass-panel p-6 rounded-2xl border border-slate-800 hover:border-slate-700 transition-all space-y-4">
                 <div className="flex items-start justify-between">
                   <div>
@@ -601,7 +608,7 @@ export const BranchesPage: React.FC = () => {
               </div>
             ))}
           </div>
-        ) : (
+        )) : (
           <div className="glass-panel rounded-2xl p-6 border border-slate-800 overflow-x-auto">
             <table className="w-full text-left text-sm text-slate-300">
               <thead className="bg-slate-900/80 text-xs font-semibold text-slate-400 uppercase tracking-wider">
@@ -615,7 +622,14 @@ export const BranchesPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
-                {filteredBranches.map(b => (
+                {filteredBranches.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-8 text-center text-slate-400 text-xs">
+                      No hay sucursales registradas aún. Presiona "Nueva Sucursal" para agregar una.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredBranches.map(b => (
                   <tr key={b.id} className="hover:bg-slate-900/40">
                     <td className="p-3.5 font-bold text-slate-100">{b.name}</td>
                     <td className="p-3.5 text-xs text-slate-400">
@@ -651,7 +665,8 @@ export const BranchesPage: React.FC = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                )))
+              }
               </tbody>
             </table>
           </div>
@@ -662,8 +677,15 @@ export const BranchesPage: React.FC = () => {
           TAB 2: CAJAS REGISTRADORAS Y TERMINALES POS
       ======================================================== */}
       {activeTab === 'registers' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredRegisters.map(r => (
+        filteredRegisters.length === 0 ? (
+          <div className="glass-panel p-12 text-center rounded-2xl border border-slate-800 text-slate-400">
+            <Monitor className="w-10 h-10 mx-auto mb-3 text-slate-600" />
+            <p className="text-sm font-semibold text-slate-300">No hay cajas registradoras</p>
+            <p className="text-xs text-slate-500 mt-1">Presiona "Nueva Caja POS" o "Vincular Terminal" para conectar un terminal de venta.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredRegisters.map(r => (
             <div key={r.id} className="glass-panel p-5 rounded-2xl border border-slate-800 hover:border-slate-700 transition-all flex flex-col justify-between space-y-4">
               <div>
                 {/* Header: Name and Status Badge */}
@@ -799,7 +821,8 @@ export const BranchesPage: React.FC = () => {
               </div>
             </div>
           ))}
-        </div>
+          </div>
+        )
       )}
 
       {/* ========================================================

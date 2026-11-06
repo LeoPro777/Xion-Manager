@@ -74,44 +74,52 @@ export const AuditLogsPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60">
-              {sessions.map((s) => (
-                <tr key={s.id} className="hover:bg-slate-900/40">
-                  <td className="p-3.5">
-                    <span className="font-bold text-slate-100 block">{s.cash_register_name}</span>
-                    <span className="text-xs text-slate-400">{s.branch_name}</span>
-                  </td>
-                  <td className="p-3.5 text-xs text-slate-200 font-medium">{s.opened_by}</td>
-                  <td className="p-3.5 text-xs text-slate-400 font-mono">
-                    <div>{s.opened_at}</div>
-                    {s.closed_at && <div className="text-slate-500">Cierre: {s.closed_at}</div>}
-                  </td>
-                  <td className="p-3.5 text-xs font-semibold">${s.initial_cash.toFixed(2)}</td>
-                  <td className="p-3.5 text-xs font-bold text-slate-200">
-                    ${s.calculated_cash ? s.calculated_cash.toFixed(2) : '-'}
-                  </td>
-                  <td className="p-3.5 text-xs font-bold text-slate-200">
-                    ${s.declared_cash ? s.declared_cash.toFixed(2) : '-'}
-                  </td>
-                  <td className="p-3.5 text-right">
-                    {s.status === 'DISCREPANCY' ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-500/10 text-rose-400 border border-rose-500/30">
-                        <AlertTriangle className="w-3.5 h-3.5" />
-                        Diferencia: ${s.difference?.toFixed(2)}
-                      </span>
-                    ) : s.status === 'CLOSED' ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Cuadrada ($0.00)
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                        <Clock className="w-3.5 h-3.5" />
-                        Turno Abierto
-                      </span>
-                    )}
+              {sessions.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="p-8 text-center text-slate-400 text-xs">
+                    No hay sesiones de caja sincronizadas aún.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                sessions.map((s) => (
+                  <tr key={s.id} className="hover:bg-slate-900/40">
+                    <td className="p-3.5">
+                      <span className="font-bold text-slate-100 block">{s.cash_register_name}</span>
+                      <span className="text-xs text-slate-400">{s.branch_name}</span>
+                    </td>
+                    <td className="p-3.5 text-xs text-slate-200 font-medium">{s.opened_by}</td>
+                    <td className="p-3.5 text-xs text-slate-400 font-mono">
+                      <div>{s.opened_at}</div>
+                      {s.closed_at && <div className="text-slate-500">Cierre: {s.closed_at}</div>}
+                    </td>
+                    <td className="p-3.5 text-xs font-semibold">${s.initial_cash.toFixed(2)}</td>
+                    <td className="p-3.5 text-xs font-bold text-slate-200">
+                      ${s.calculated_cash ? s.calculated_cash.toFixed(2) : '-'}
+                    </td>
+                    <td className="p-3.5 text-xs font-bold text-slate-200">
+                      ${s.declared_cash ? s.declared_cash.toFixed(2) : '-'}
+                    </td>
+                    <td className="p-3.5 text-right">
+                      {s.status === 'DISCREPANCY' ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-500/10 text-rose-400 border border-rose-500/30">
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          Diferencia: ${s.difference?.toFixed(2)}
+                        </span>
+                      ) : s.status === 'CLOSED' ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Cuadrada ($0.00)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                          <Clock className="w-3.5 h-3.5" />
+                          Turno Abierto
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -138,19 +146,27 @@ export const AuditLogsPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-mono text-xs">
-              {logs.map((log) => (
-                <tr key={log.id} className="hover:bg-slate-900/40">
-                  <td className="p-3.5 text-slate-400">{log.timestamp}</td>
-                  <td className="p-3.5 font-bold text-slate-200">
-                    <div>{log.user_name}</div>
-                    <span className="text-[10px] text-cyan-400 font-normal">{log.role}</span>
+              {logs.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="p-8 text-center text-slate-400 text-xs font-sans">
+                    No hay registros de auditoría aún.
                   </td>
-                  <td className="p-3.5 text-slate-300">{log.module}</td>
-                  <td className="p-3.5 font-semibold text-emerald-400">{log.action_type}</td>
-                  <td className="p-3.5 font-sans text-slate-300 max-w-xs">{log.description}</td>
-                  <td className="p-3.5 text-right text-slate-500">{log.ip_address}</td>
                 </tr>
-              ))}
+              ) : (
+                logs.map((log) => (
+                  <tr key={log.id} className="hover:bg-slate-900/40">
+                    <td className="p-3.5 text-slate-400">{log.timestamp}</td>
+                    <td className="p-3.5 font-bold text-slate-200">
+                      <div>{log.user_name}</div>
+                      <span className="text-[10px] text-cyan-400 font-normal">{log.role}</span>
+                    </td>
+                    <td className="p-3.5 text-slate-300">{log.module}</td>
+                    <td className="p-3.5 font-semibold text-emerald-400">{log.action_type}</td>
+                    <td className="p-3.5 font-sans text-slate-300 max-w-xs">{log.description}</td>
+                    <td className="p-3.5 text-right text-slate-500">{log.ip_address}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

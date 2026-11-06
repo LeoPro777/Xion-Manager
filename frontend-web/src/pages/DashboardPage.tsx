@@ -160,31 +160,49 @@ export const DashboardPage: React.FC = () => {
         </div>
 
         {/* Mobile View: Clean native-style cards */}
-        <div className="sm:hidden space-y-2.5">
-          {branches.map((b) => (
-            <div key={b.id} className="p-3 rounded-xl bg-slate-900/60 border border-slate-800/80 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-7 h-7 shrink-0 rounded-lg bg-slate-800 flex items-center justify-center text-cyan-400 font-bold text-[11px]">
-                    {b.name.substring(0, 2).toUpperCase()}
+        {branches.length === 0 ? (
+          <div className="text-center py-8 text-slate-400 text-xs sm:text-sm">
+            No hay sucursales registradas aún.
+          </div>
+        ) : (
+          <div className="sm:hidden space-y-2.5">
+            {branches.map((b) => {
+              const branchSales = cashRegisters
+                .filter(r => r.branch_id === b.id)
+                .reduce((acc, r) => acc + (r.today_sales_total || 0), 0);
+              const activeRegCount = cashRegisters.filter(r => r.branch_id === b.id && r.is_active).length;
+              return (
+                <div key={b.id} className="p-3 rounded-xl bg-slate-900/60 border border-slate-800/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 shrink-0 rounded-lg bg-slate-800 flex items-center justify-center text-cyan-400 font-bold text-[11px]">
+                        {b.name.substring(0, 2).toUpperCase()}
+                      </div>
+                      <span className="font-bold text-xs text-slate-100 truncate">{b.name}</span>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border shrink-0 ${
+                      b.is_active 
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        : 'bg-slate-800 text-slate-400 border border-slate-700'
+                    }`}>
+                      {b.is_active ? 'Operativa' : 'Inactiva'}
+                    </span>
                   </div>
-                  <span className="font-bold text-xs text-slate-100 truncate">{b.name}</span>
+                  <p className="text-[11px] text-slate-400 truncate">{b.address}</p>
+                  <div className="flex items-center justify-between pt-1.5 border-t border-slate-800/60 text-xs">
+                    <span className="inline-flex items-center gap-1 text-[11px] text-slate-300">
+                      <Monitor className="w-3 h-3 text-cyan-400" />
+                      {activeRegCount} Cajas
+                    </span>
+                    <span className="font-bold text-emerald-400 text-xs">
+                      ${branchSales.toLocaleString('es-ES', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
                 </div>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0">
-                  Operativa
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 truncate">{b.address}</p>
-              <div className="flex items-center justify-between pt-1.5 border-t border-slate-800/60 text-xs">
-                <span className="inline-flex items-center gap-1 text-[11px] text-slate-300">
-                  <Monitor className="w-3 h-3 text-cyan-400" />
-                  {b.active_cash_registers_count} Cajas
-                </span>
-                <span className="font-bold text-emerald-400 text-xs">$6,240.25</span>
-              </div>
-            </div>
-          ))}
-        </div>
+              );
+            })}
+          </div>
+        )}
 
         {/* Desktop View: Table */}
         <div className="hidden sm:block overflow-x-auto">
@@ -199,29 +217,49 @@ export const DashboardPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60">
-              {branches.map((b) => (
-                <tr key={b.id} className="hover:bg-slate-900/40 transition-colors">
-                  <td className="p-3.5 font-semibold text-slate-100 flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-cyan-400 font-bold text-xs">
-                      {b.name.substring(0, 2).toUpperCase()}
-                    </div>
-                    {b.name}
-                  </td>
-                  <td className="p-3.5 text-slate-400 text-xs">{b.address}</td>
-                  <td className="p-3.5 font-medium">
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900 text-slate-300 border border-slate-800 text-xs">
-                      <Monitor className="w-3.5 h-3.5 text-cyan-400" />
-                      {b.active_cash_registers_count} Cajas
-                    </span>
-                  </td>
-                  <td className="p-3.5 font-bold text-emerald-400">$6,240.25</td>
-                  <td className="p-3.5 text-right">
-                    <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                      Operativa
-                    </span>
+              {branches.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="p-8 text-center text-slate-400 text-xs">
+                    No hay sucursales registradas aún.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                branches.map((b) => {
+                  const branchSales = cashRegisters
+                    .filter(r => r.branch_id === b.id)
+                    .reduce((acc, r) => acc + (r.today_sales_total || 0), 0);
+                  const activeRegCount = cashRegisters.filter(r => r.branch_id === b.id && r.is_active).length;
+                  return (
+                    <tr key={b.id} className="hover:bg-slate-900/40 transition-colors">
+                      <td className="p-3.5 font-semibold text-slate-100 flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-cyan-400 font-bold text-xs">
+                          {b.name.substring(0, 2).toUpperCase()}
+                        </div>
+                        {b.name}
+                      </td>
+                      <td className="p-3.5 text-slate-400 text-xs">{b.address}</td>
+                      <td className="p-3.5 font-medium">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900 text-slate-300 border border-slate-800 text-xs">
+                          <Monitor className="w-3.5 h-3.5 text-cyan-400" />
+                          {activeRegCount} Cajas
+                        </span>
+                      </td>
+                      <td className="p-3.5 font-bold text-emerald-400">
+                        ${branchSales.toLocaleString('es-ES', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="p-3.5 text-right">
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                          b.is_active 
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700'
+                        }`}>
+                          {b.is_active ? 'Operativa' : 'Inactiva'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>

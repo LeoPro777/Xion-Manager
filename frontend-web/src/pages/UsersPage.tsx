@@ -177,74 +177,87 @@ export const UsersPage: React.FC = () => {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60">
-            {filteredUsers.map((u) => {
-              const badge = roleBadges[u.role] || { label: u.role, color: 'bg-slate-800 text-slate-300' };
-              const isPending = u.approval_status === 'PENDING';
-              return (
-                <tr key={u.id} className="hover:bg-slate-900/40">
-                  <td className="p-3.5 font-bold text-slate-100 flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-bold text-xs text-slate-300 shrink-0">
-                      {u.full_name.substring(0, 2).toUpperCase()}
-                    </div>
-                    <span>{u.full_name}</span>
-                  </td>
-                  <td className="p-3.5 text-xs text-slate-400">
-                    <span className="block text-slate-200 font-mono">{u.email}</span>
-                    {u.phone || 'Sin teléfono'}
-                  </td>
-                  <td className="p-3.5">
-                    <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${badge.color}`}>
-                      {badge.label}
-                    </span>
-                  </td>
-                  <td className="p-3.5 text-xs text-slate-300">
-                    {u.branch_name || 'Acceso Global (Todas)'}
-                  </td>
-                  <td className="p-3.5">
-                    {isPending ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                        <Clock className="w-3.5 h-3.5" />
-                        Pendiente Revisión
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Autorizado
-                      </span>
-                    )}
-                  </td>
-                  <td className="p-3.5 text-right">
-                    {isPending ? (
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => handleApproval(u.id, 'APPROVED')}
-                          className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center gap-1"
-                        >
-                          <UserCheck className="w-3.5 h-3.5" />
-                          Aprobar
-                        </button>
-                        <button
-                          onClick={() => handleApproval(u.id, 'REJECTED')}
-                          className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white font-bold text-xs transition-colors flex items-center gap-1"
-                        >
-                          <UserX className="w-3.5 h-3.5" />
-                          Rechazar
-                        </button>
+            {filteredUsers.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="p-8 text-center text-slate-400 text-xs">
+                  No hay colaboradores registrados. Utiliza el botón "Vincular Personal" para agregar operadores.
+                </td>
+              </tr>
+            ) : (
+              filteredUsers.map((u) => {
+                const badge = roleBadges[u.role] || { label: u.role, color: 'bg-slate-800 text-slate-300' };
+                const isPending = u.approval_status === 'PENDING';
+                return (
+                  <tr key={u.id} className="hover:bg-slate-900/40">
+                    <td className="p-3.5 font-bold text-slate-100 flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-bold text-xs text-slate-300 shrink-0">
+                        {u.full_name.substring(0, 2).toUpperCase()}
                       </div>
-                    ) : (
-                      <span className="text-xs text-slate-500 font-semibold">Activo</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
+                      <span>{u.full_name}</span>
+                    </td>
+                    <td className="p-3.5 text-xs text-slate-400">
+                      <span className="block text-slate-200 font-mono">{u.email}</span>
+                      {u.phone || 'Sin teléfono'}
+                    </td>
+                    <td className="p-3.5">
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${badge.color}`}>
+                        {badge.label}
+                      </span>
+                    </td>
+                    <td className="p-3.5 text-xs text-slate-300">
+                      {u.branch_name || 'Acceso Global (Todas)'}
+                    </td>
+                    <td className="p-3.5">
+                      {isPending ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                          <Clock className="w-3.5 h-3.5" />
+                          Pendiente Revisión
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Autorizado
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-3.5 text-right">
+                      {isPending ? (
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => handleApproval(u.id, 'APPROVED')}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center gap-1"
+                          >
+                            <UserCheck className="w-3.5 h-3.5" />
+                            Aprobar
+                          </button>
+                          <button
+                            onClick={() => handleApproval(u.id, 'REJECTED')}
+                            className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white font-bold text-xs transition-colors flex items-center gap-1"
+                          >
+                            <UserX className="w-3.5 h-3.5" />
+                            Rechazar
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-500 font-semibold">Activo</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </table>
       </div>
 
       {/* Users Mobile Card View (md:hidden) */}
       <div className="md:hidden space-y-3">
-        {filteredUsers.map((u) => {
+        {filteredUsers.length === 0 ? (
+          <div className="glass-panel p-6 text-center text-slate-400 text-xs rounded-xl border border-slate-800">
+            No hay colaboradores registrados. Utiliza el botón "Vincular Personal" para agregar operadores.
+          </div>
+        ) : (
+          filteredUsers.map((u) => {
           const badge = roleBadges[u.role] || { label: u.role, color: 'bg-slate-800 text-slate-300' };
           const isPending = u.approval_status === 'PENDING';
           return (
@@ -300,7 +313,7 @@ export const UsersPage: React.FC = () => {
               )}
             </div>
           );
-        })}
+        }))}
       </div>
 
       {/* ========================================================

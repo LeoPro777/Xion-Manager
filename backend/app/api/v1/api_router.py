@@ -1588,39 +1588,9 @@ async def get_dashboard_metrics(branch_id: Optional[str] = None):
     }
 
 # 2. Branches & Cash Registers State & Endpoints
-branches_db = [
-    {
-        "id": "branch-1",
-        "business_id": "biz-101",
-        "name": "Sucursal Principal",
-        "address": "Sede Principal",
-        "latitude": 10.6417,
-        "longitude": -71.6125,
-        "phone": "+58 414-0000000",
-        "manager_user_id": "usr-admin-01",
-        "manager_name": "Administrador",
-        "active_cash_registers_count": 1,
-        "is_active": True,
-        "created_at": datetime.utcnow()
-    }
-]
+branches_db: List[dict] = []
 
-cash_registers_db = [
-    {
-        "id": "reg-01",
-        "branch_id": "branch-1",
-        "branch_name": "Sucursal Principal",
-        "name": "Caja 01",
-        "hardware_uuid": "HW-POS-01",
-        "status": "CLOSED",
-        "is_active": True,
-        "current_operator": None,
-        "today_sales_total": 0.00,
-        "allowed_user_ids": ["usr-admin-01"],
-        "payment_methods": ["CASH_USD", "CASH_BS", "PAGO_MOVIL", "DEBIT_CARD"],
-        "created_at": datetime.utcnow()
-    }
-]
+cash_registers_db: List[dict] = []
 
 def recalculate_branch_cash_registers():
     for b in branches_db:
@@ -1771,12 +1741,7 @@ inventory_db: List[dict] = []
 
 transfers_db: List[dict] = []
 
-categories_db: List[dict] = [
-    {"id": "cat-1", "name": "Víveres", "parent_id": None, "full_path": "Víveres", "is_active": True},
-    {"id": "cat-2", "name": "Bebidas", "parent_id": None, "full_path": "Bebidas", "is_active": True},
-    {"id": "cat-3", "name": "Limpieza y Hogar", "parent_id": None, "full_path": "Limpieza y Hogar", "is_active": True},
-    {"id": "cat-4", "name": "Combos y Promociones", "parent_id": None, "full_path": "Combos y Promociones", "is_active": True}
-]
+categories_db: List[dict] = []
 
 shrinkage_db: List[dict] = []
 
@@ -2138,30 +2103,36 @@ async def pay_purchase_debt(purchase_id: str, payload: PurchasePayDTO):
 
 # 5. Users & Approvals
 @api_router.get("/users")
-async def list_users():
+async def list_users(db: AsyncSession = Depends(get_db)):
     verify_system_operational()
+    result = await db.execute(select(UserModel).order_by(UserModel.created_at.desc()))
+    users = result.scalars().all()
     return [
         {
-            "id": "usr-1",
-            "email": "juan.delgado@xion.com",
-            "full_name": "Juan Delgado",
-            "role": "OWNER",
-            "approval_status": "APPROVED",
-            "is_active": True
-        },
-        {
-            "id": "usr-4",
-            "email": "pedro.cajero@xion.com",
-            "full_name": "Pedro Ramos",
-            "role": "CASHIER",
-            "approval_status": "PENDING",
-            "is_active": False
+            "id": u.id,
+            "email": u.email,
+            "full_name": u.full_name,
+            "role": u.role,
+            "branch_id": u.branch_id,
+            "approval_status": u.approval_status,
+            "is_active": u.is_active
         }
+        for u in users
     ]
 
 @api_router.post("/users/approval")
-async def user_approval(user_id: str = Body(...), status_val: str = Body(...)):
+async def user_approval(user_id: str = Body(...), status_val: str = Body(...), db: AsyncSession = Depends(get_db)):
     verify_system_operational()
+    user_res = await db.execute(select(UserModel).where(UserModel.id == user_id))
+    user = user_res.scalar_one_or_none()
+    if user:
+        user.approval_status = status_val
+        if status_val == "APPROVED":
+            user.is_active = True
+        elif status_val == "REJECTED":
+            user.is_active = False
+        user.updated_at = datetime.utcnow()
+        await db.commit()
     return {
         "user_id": user_id,
         "approval_status": status_val,
@@ -2169,20 +2140,7 @@ async def user_approval(user_id: str = Body(...), status_val: str = Body(...)):
     }
 
 # Staff / Employee Pairing DB & Endpoints (Misma lógica de vinculación que las cajas)
-staff_pairings_db = [
-    {
-        "pairing_code": "XM-792",
-        "user_id": "usr-staff-demo",
-        "email": "almacen.demo@xion.com",
-        "full_name": "Elena Blanco",
-        "role": "SUPERVISOR",
-        "branch_id": "branch-1",
-        "branch_name": "Sucursal Principal - Centro",
-        "status": "APPROVED",
-        "created_at": datetime.utcnow().isoformat(),
-        "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
-    }
-]
+staff_pairings_db: List[dict] = []
 
 # Rate Limiter en memoria para endpoints de vinculación (Prevención de fuerza bruta en códigos de 6 caracteres)
 pairing_rate_limit_store = defaultdict(list)
@@ -2494,54 +2452,33 @@ async def reject_staff_request(payload: dict = Body(...)):
 
 # 6. Audit & Cash Sessions
 @api_router.get("/audit/logs")
-async def get_audit_logs():
+async def get_audit_logs(db: AsyncSession = Depends(get_db)):
     verify_system_operational()
+    result = await db.execute(select(AuditLogModel).order_by(AuditLogModel.created_at.desc()).limit(100))
+    logs = result.scalars().all()
     return [
         {
-            "id": "log-1",
-            "timestamp": "2026-10-08 13:45:10",
-            "user_name": "Carlos Mendoza",
+            "id": l.id,
+            "timestamp": l.created_at.strftime("%Y-%m-%d %H:%M:%S") if l.created_at else "",
+            "user_name": l.user_id or "Sistema",
             "role": "ADMIN",
-            "module": "INVENTARIO",
-            "action_type": "STOCK_TRANSFER_DISPATCH",
-            "description": "Despacho de traslado #TR-102: 20 unid. Harina Pan hacia Sucursal Norte",
-            "ip_address": "192.168.1.45"
+            "module": l.module,
+            "action_type": l.action_type,
+            "description": l.description,
+            "ip_address": l.ip_address or "127.0.0.1"
         }
+        for l in logs
     ]
 
 @api_router.get("/audit/cash-sessions")
 async def get_cash_sessions():
     verify_system_operational()
-    return [
-        {
-            "id": "sess-01",
-            "cash_register_name": "Caja 01 - Principal",
-            "branch_name": "Sucursal Principal",
-            "opened_by": "Carlos Mendoza",
-            "opened_at": "2026-10-08 08:00",
-            "closed_at": "2026-10-08 16:00",
-            "initial_cash": 100.00,
-            "declared_cash": 540.00,
-            "calculated_cash": 540.00,
-            "difference": 0.00,
-            "status": "CLOSED"
-        }
-    ]
+    return []
 
 # 8. Notifications
 @api_router.get("/notifications")
 async def get_notifications():
-    return [
-        {
-            "id": "notif-1",
-            "timestamp": "Hace 5 min",
-            "severity": "URGENT",
-            "title": "Descuadre de Caja Detectado",
-            "message": "Caja 01 en Sucursal Norte cerró con diferencia en arqueo ciego.",
-            "read": False,
-            "link_tab": "audit"
-        }
-    ]
+    return []
 
 # 9. Billing & Xion-Pay
 @api_router.get("/billing/account-status", response_model=AccountStatusResponse)

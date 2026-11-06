@@ -11,8 +11,8 @@ const DEFAULT_GOOGLE_CLIENT_ID = '926646602874-dakf4njbrmgg2fp4qokfflq7tlhid68j.
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [isRegisterMode, setIsRegisterMode] = useState(false);
-  const [email, setEmail] = useState('admin@xion.com');
-  const [password, setPassword] = useState('••••••••');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [registerFullName, setRegisterFullName] = useState('');
   const [registerPhone, setRegisterPhone] = useState('');
   const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');

@@ -9,7 +9,7 @@ from app.models.entities import (
 
 async def seed_initial_data():
     """
-    Puebla la base de datos local con los planes base, negocio de prueba, sucursales e inventario.
+    Puebla la base de datos local con los planes base del sistema.
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -20,7 +20,20 @@ async def seed_initial_data():
         existing_plans = result.scalars().all()
         
         if not existing_plans:
+            plan_trial = SubscriptionPlan(
+                id="plan-trial",
+                code="TRIAL",
+                name="Plan Gratuito (Prueba 30 Días)",
+                description="Acceso total sin costo durante 30 días para evaluar la plataforma multi-sucursal y sincronización POS",
+                max_branches=2,
+                max_cash_registers=3,
+                price_monthly=0.00,
+                price_semiannual=0.00,
+                price_annual=0.00,
+                is_active=True
+            )
             plan_emp = SubscriptionPlan(
+                id="plan-emp",
                 code="EMP",
                 name="Plan Emprendedor",
                 description="Ideal para pequeños comercios y 1 sucursal única.",
@@ -28,9 +41,11 @@ async def seed_initial_data():
                 max_cash_registers=1,
                 price_monthly=20.00,
                 price_semiannual=108.00,
-                price_annual=192.00
+                price_annual=192.00,
+                is_active=True
             )
             plan_com = SubscriptionPlan(
+                id="plan-com",
                 code="COM",
                 name="Plan Comercio",
                 description="Hasta 3 sucursales y 6 cajas registradoras.",
@@ -38,9 +53,11 @@ async def seed_initial_data():
                 max_cash_registers=6,
                 price_monthly=50.00,
                 price_semiannual=270.00,
-                price_annual=480.00
+                price_annual=480.00,
+                is_active=True
             )
             plan_corp = SubscriptionPlan(
+                id="plan-corp",
                 code="CORP",
                 name="Plan Corporativo",
                 description="Hasta 10 sucursales y 25 cajas registradoras.",
@@ -48,26 +65,12 @@ async def seed_initial_data():
                 max_cash_registers=25,
                 price_monthly=150.00,
                 price_semiannual=810.00,
-                price_annual=1440.00
-            )
-            session.add_all([plan_emp, plan_com, plan_corp])
-            await session.commit()
-        # 2. Verificar si existe negocio principal
-        biz_result = await session.execute(select(Business).limit(1))
-        existing_biz = biz_result.scalar_one_or_none()
-        if not existing_biz:
-            default_biz = Business(
-                id="biz-101",
-                legal_name="Comercializadora Xion C.A.",
-                trade_name="Xion Supermarket & Retail",
-                tax_id="J-12345678-9",
-                phone="+58 414-1112233",
-                email="contacto@xion.com",
+                price_annual=1440.00,
                 is_active=True
             )
-            session.add(default_biz)
+            session.add_all([plan_trial, plan_emp, plan_com, plan_corp])
             await session.commit()
-            print("✓ Negocio corporativo inicial sembrado exitosamente.")
+            print("✓ Planes de suscripción oficiales configurados.")
 
 
 if __name__ == "__main__":
