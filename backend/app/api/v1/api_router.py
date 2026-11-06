@@ -30,7 +30,7 @@ from app.services.image_service import (
 )
 from app.services.storage_service import storage_service
 from app.services.xion_pay_service import XionPayService
-from sqlalchemy import select, update
+from sqlalchemy import select, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.entities import (
@@ -447,7 +447,8 @@ async def receive_xion_pay_webhook(
         # 2. Actualizar comercio localmente en base de datos
         biz = None
         if tax_id:
-            biz_res = await db.execute(select(BusinessModel).where(BusinessModel.tax_id == tax_id))
+            clean_tax = tax_id.replace("J-J-", "J-").replace("V-V-", "V-")
+            biz_res = await db.execute(select(BusinessModel).where(or_(BusinessModel.tax_id == tax_id, BusinessModel.tax_id == clean_tax)))
             biz = biz_res.scalar_one_or_none()
         if not biz:
             biz_res = await db.execute(select(BusinessModel).limit(1))
@@ -481,6 +482,51 @@ async def receive_xion_pay_webhook(
             "event": event,
             "processed": True,
             "message": "Comercio suspendido, licencia revocada y módulos operativos restringidos con éxito."
+        }
+
+    elif event in ("account.activated", "account_activated"):
+        token = data.get("license_token") or license_token
+
+        # 1. Actualizar comercio en memoria
+        xion_pay_state["is_active"] = True
+        xion_pay_state["status"] = "active"
+        xion_pay_state["license_status"] = "active"
+        if token:
+            xion_pay_state["license_token"] = token
+        xion_pay_state["suspension_reason"] = None
+
+        # 2. Actualizar comercio en base de datos
+        biz = None
+        if tax_id:
+            clean_tax = tax_id.replace("J-J-", "J-").replace("V-V-", "V-")
+            biz_res = await db.execute(select(BusinessModel).where(or_(BusinessModel.tax_id == tax_id, BusinessModel.tax_id == clean_tax)))
+            biz = biz_res.scalar_one_or_none()
+        if not biz:
+            biz_res = await db.execute(select(BusinessModel).limit(1))
+            biz = biz_res.scalar_one_or_none()
+
+        if biz:
+            biz.is_active = True
+            biz.status = "active"
+            if token:
+                biz.license_token = token
+            biz.suspension_reason = None
+            biz.updated_at = datetime.utcnow()
+
+            # Reactivar suscripción
+            sub_res = await db.execute(select(BusinessSubscription).where(BusinessSubscription.business_id == biz.id))
+            sub = sub_res.scalar_one_or_none()
+            if sub:
+                sub.status = "ACTIVE"
+                sub.updated_at = datetime.utcnow()
+
+            await db.commit()
+
+        return {
+            "status": "received",
+            "event": event,
+            "processed": True,
+            "message": "Comercio reactivado, licencia reestablecida y módulos operativos reactivados con éxito."
         }
 
     elif event in ("subscription.renewed", "subscription_renewed", "license.renewed", "license_renewed"):
@@ -523,7 +569,8 @@ async def receive_xion_pay_webhook(
         # 2. Guardar token RS256 y configuración en base de datos
         biz = None
         if tax_id:
-            biz_res = await db.execute(select(BusinessModel).where(BusinessModel.tax_id == tax_id))
+            clean_tax = tax_id.replace("J-J-", "J-").replace("V-V-", "V-")
+            biz_res = await db.execute(select(BusinessModel).where(or_(BusinessModel.tax_id == tax_id, BusinessModel.tax_id == clean_tax)))
             biz = biz_res.scalar_one_or_none()
         if not biz:
             biz_res = await db.execute(select(BusinessModel).limit(1))
@@ -2106,25 +2153,44 @@ async def request_staff_pairing(request: Request, payload: dict = Body(...)):
 async def get_staff_pairing_status(pairing_code: str):
     """
     Consulta el estado de aprobación del código de vinculación de personal.
+    Valida vigencia temporal (15 minutos) y normaliza formato.
     """
-    code = pairing_code.upper().strip()
+    code = (pairing_code or "").upper().strip()
+    if not code.startswith("XM-") and code.isdigit():
+        code = f"XM-{code}"
+
     for s in staff_pairings_db:
         if s["pairing_code"].upper() == code:
+            exp_str = s.get("expires_at")
+            if exp_str and s.get("status") == "PENDING":
+                try:
+                    exp_dt = datetime.fromisoformat(exp_str)
+                    if exp_dt < datetime.utcnow():
+                        s["status"] = "EXPIRED"
+                        return {
+                            "status": "EXPIRED",
+                            "pairing_code": code,
+                            "message": "El código de vinculación ha expirado. Por favor genera uno nuevo."
+                        }
+                except Exception:
+                    pass
             return s
     return {"status": "PENDING", "pairing_code": code}
 
 @api_router.post("/staff/confirm-pairing")
-async def confirm_staff_pairing(request: Request, payload: dict = Body(...)):
+async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db: AsyncSession = Depends(get_db)):
     """
     Registra el intento de vinculación del colaborador.
-    Aplica rate limit estricto (máx 5 intentos/minuto) y exige SIEMPRE la aprobación del Propietario.
+    Aplica rate limit estricto (máx 10 intentos/minuto), valida expiración y verifica autorización.
     """
     client_ip = request.client.host if request.client else "127.0.0.1"
-    check_pairing_rate_limit(client_ip, max_requests=5, window_seconds=60)
+    check_pairing_rate_limit(client_ip, max_requests=10, window_seconds=60)
 
     code = (payload.get("pairing_code") or "").upper().strip()
     if not code:
         raise HTTPException(status_code=400, detail="Debes proporcionar un código de vinculación válido.")
+    if not code.startswith("XM-") and code.isdigit():
+        code = f"XM-{code}"
 
     role = payload.get("role", "SUPERVISOR")
     branch_id = payload.get("branch_id") or "branch-1"
@@ -2141,8 +2207,42 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...)):
             existing = s
             break
 
+    # Verificar si expiró
+    if existing and existing.get("expires_at"):
+        try:
+            exp_dt = datetime.fromisoformat(existing["expires_at"])
+            if exp_dt < datetime.utcnow():
+                existing["status"] = "EXPIRED"
+                raise HTTPException(status_code=400, detail="El código de vinculación ha expirado. Solicita un nuevo código.")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
     # Si ya existía y el propietario ya la autorizó explícitamente desde Users
     if existing and existing.get("status") == "APPROVED":
+        # Sincronizar en base de datos si existe usuario
+        uid = payload.get("user_id") or existing.get("user_id")
+        email = payload.get("email") or existing.get("email")
+        if uid or email:
+            try:
+                from sqlalchemy import or_
+                cond = []
+                if uid:
+                    cond.append(UserModel.id == uid)
+                if email:
+                    cond.append(UserModel.email == email)
+                user_res = await db.execute(select(UserModel).where(or_(*cond)))
+                user = user_res.scalar_one_or_none()
+                if user:
+                    user.branch_id = existing.get("branch_id", branch_id)
+                    user.role = existing.get("role", role)
+                    user.approval_status = "APPROVED"
+                    user.is_active = True
+                    await db.commit()
+            except Exception:
+                pass
+
         return {
             "status": "APPROVED",
             "message": f"Personal vinculado exitosamente como {existing.get('role', role)}",
@@ -2186,30 +2286,106 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...)):
 async def list_pending_staff_requests():
     """
     Lista de solicitudes pendientes de personal para el panel del Propietario.
+    Filtra solicitudes expiradas.
     """
-    return [s for s in staff_pairings_db if s.get("status") == "PENDING"]
+    now = datetime.utcnow()
+    valid_requests = []
+    for s in staff_pairings_db:
+        if s.get("status") == "PENDING":
+            exp_str = s.get("expires_at")
+            if exp_str:
+                try:
+                    if datetime.fromisoformat(exp_str) < now:
+                        s["status"] = "EXPIRED"
+                        continue
+                except Exception:
+                    pass
+            valid_requests.append(s)
+    return valid_requests
 
 @api_router.post("/staff/approve-request")
-async def approve_staff_request(payload: dict = Body(...)):
+async def approve_staff_request(payload: dict = Body(...), db: AsyncSession = Depends(get_db)):
     """
-    El propietario aprueba una solicitud de vinculación de personal.
+    El propietario aprueba una solicitud de vinculación de personal o pre-autoriza un código.
+    Actualiza la base de datos de usuarios si existe registro.
     """
     code = (payload.get("pairing_code") or "").upper().strip()
+    if not code.startswith("XM-") and code.isdigit():
+        code = f"XM-{code}"
+
     branch_id = payload.get("branch_id") or "branch-1"
+    role = payload.get("role")
     branch_name = "Sucursal Principal - Centro"
     for b in branches_db:
         if b["id"] == branch_id:
             branch_name = b["name"]
             break
 
+    target_req = None
     for s in staff_pairings_db:
         if s["pairing_code"].upper() == code:
             s["status"] = "APPROVED"
             s["branch_id"] = branch_id
             s["branch_name"] = branch_name
-            return {"message": "Solicitud aprobada y personal vinculado", "request": s}
+            if role:
+                s["role"] = role
+            target_req = s
+            break
 
-    return {"message": "Solicitud no encontrada"}
+    # Si no existía solicitud previa, el propietario está pre-creando la autorización
+    if not target_req:
+        target_req = {
+            "pairing_code": code,
+            "status": "APPROVED",
+            "branch_id": branch_id,
+            "branch_name": branch_name,
+            "role": role or "SUPERVISOR",
+            "full_name": payload.get("full_name") or f"Colaborador ({role or 'SUPERVISOR'})",
+            "email": payload.get("email") or f"colaborador.{code.lower()}@xion.com",
+            "created_at": datetime.utcnow().isoformat(),
+            "expires_at": (datetime.utcnow() + timedelta(minutes=60)).isoformat()
+        }
+        staff_pairings_db.append(target_req)
+
+    # Actualizar estado del usuario en la base de datos si existe
+    uid = target_req.get("user_id")
+    email = target_req.get("email")
+    if uid or email:
+        try:
+            from sqlalchemy import or_
+            cond = []
+            if uid:
+                cond.append(UserModel.id == uid)
+            if email:
+                cond.append(UserModel.email == email)
+            user_res = await db.execute(select(UserModel).where(or_(*cond)))
+            user = user_res.scalar_one_or_none()
+            if user:
+                user.branch_id = branch_id
+                user.role = target_req.get("role") or user.role
+                user.approval_status = "APPROVED"
+                user.is_active = True
+                user.updated_at = datetime.utcnow()
+                await db.commit()
+        except Exception:
+            pass
+
+    return {
+        "status": "APPROVED",
+        "message": f"Personal vinculado y autorizado con éxito como {target_req.get('role', 'Colaborador')}",
+        "request": target_req
+    }
+
+@api_router.post("/staff/reject-request")
+async def reject_staff_request(payload: dict = Body(...)):
+    """El propietario rechaza o descarta una solicitud de vinculación."""
+    code = (payload.get("pairing_code") or "").upper().strip()
+    if not code.startswith("XM-") and code.isdigit():
+        code = f"XM-{code}"
+
+    global staff_pairings_db
+    staff_pairings_db = [s for s in staff_pairings_db if s["pairing_code"].upper() != code]
+    return {"status": "REJECTED", "message": f"Solicitud {code} descartada correctamente"}
 
 
 # 6. Audit & Cash Sessions

@@ -640,26 +640,28 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setStaffPairingTab('GENERATE_QR')}
-                  className={`py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-2 ${
+                  className={`py-2 px-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${
                     staffPairingTab === 'GENERATE_QR'
                       ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  <QrCode className="w-4 h-4" />
-                  <span>Generar Código y QR (Flujo Smart TV)</span>
+                  <QrCode className="w-4 h-4 shrink-0" />
+                  <span className="hidden sm:inline">Generar Código y QR (Flujo Smart TV)</span>
+                  <span className="sm:hidden">Generar QR</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setStaffPairingTab('ENTER_CODE')}
-                  className={`py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-2 ${
+                  className={`py-2 px-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${
                     staffPairingTab === 'ENTER_CODE'
                       ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  <KeyRound className="w-4 h-4" />
-                  <span>Introducir Código de Invitación</span>
+                  <KeyRound className="w-4 h-4 shrink-0" />
+                  <span className="hidden sm:inline">Introducir Código de Invitación</span>
+                  <span className="sm:hidden">Ingresar Código</span>
                 </button>
               </div>
 

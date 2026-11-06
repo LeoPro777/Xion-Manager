@@ -917,18 +917,32 @@ export const api = {
     return [];
   },
 
-  async approveStaffPairingRequest(pairingCode: string, branchId?: string): Promise<{ message: string }> {
+  async approveStaffPairingRequest(pairingCode: string, branchId?: string, role?: Role): Promise<{ message: string; request?: any }> {
     try {
       const res = await fetch('/api/v1/staff/approve-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pairing_code: pairingCode, branch_id: branchId })
+        body: JSON.stringify({ pairing_code: pairingCode, branch_id: branchId, role })
       });
       if (res.ok) {
         return await res.json();
       }
     } catch {}
     return { message: 'Solicitud aprobada y colaborador vinculado' };
+  },
+
+  async rejectStaffPairingRequest(pairingCode: string): Promise<{ message: string }> {
+    try {
+      const res = await fetch('/api/v1/staff/reject-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairing_code: pairingCode })
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+    return { message: 'Solicitud descartada' };
   },
 
 
