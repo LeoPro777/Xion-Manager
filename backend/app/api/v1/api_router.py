@@ -2511,10 +2511,6 @@ async def reject_staff_request(payload: dict = Body(...)):
             return {"status": "REJECTED", "message": f"Solicitud {code} descartada correctamente"}
 
     return {"status": "REJECTED", "message": f"Solicitud {code} descartada correctamente"}
-            s["rejected_at"] = datetime.utcnow().isoformat()
-            return {"status": "REJECTED", "message": f"Solicitud {code} descartada correctamente"}
-
-    return {"status": "REJECTED", "message": f"Solicitud {code} descartada correctamente"}
 
 
 # 6. Audit & Cash Sessions
