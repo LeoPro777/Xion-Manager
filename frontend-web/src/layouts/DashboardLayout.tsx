@@ -101,9 +101,16 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
   useEffect(() => {
     api.getNotifications().then(setNotifications);
     api.getExchangeRate().then((cfg) => setExchangeRate(cfg.current_exchange_rate_bs));
-    api.getAccountStatus().then((st) => {
-      setIsSuspended(st?.traffic_light?.status === 'SUSPENDED');
-    }).catch(() => {});
+
+    const checkLicenseStatus = () => {
+      api.getAccountStatus().then((st) => {
+        setIsSuspended(st?.traffic_light?.status === 'SUSPENDED');
+      }).catch(() => {});
+    };
+
+    checkLicenseStatus();
+    // Sondeo periódico cada 4 segundos para reflejar bloqueos en tiempo real
+    const statusInterval = setInterval(checkLicenseStatus, 4000);
 
     const handleSettingsUpdated = (e: Event) => {
       const customEvent = e as CustomEvent;
@@ -111,8 +118,24 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
         setExchangeRate(Number(customEvent.detail.current_exchange_rate_bs));
       }
     };
+
+    const handleAccountStatusUpdated = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (typeof customEvent.detail?.isSuspended === 'boolean') {
+        setIsSuspended(customEvent.detail.isSuspended);
+      } else {
+        checkLicenseStatus();
+      }
+    };
+
     window.addEventListener('xion:settings-updated', handleSettingsUpdated);
-    return () => window.removeEventListener('xion:settings-updated', handleSettingsUpdated);
+    window.addEventListener('xion:account-status-updated', handleAccountStatusUpdated);
+
+    return () => {
+      clearInterval(statusInterval);
+      window.removeEventListener('xion:settings-updated', handleSettingsUpdated);
+      window.removeEventListener('xion:account-status-updated', handleAccountStatusUpdated);
+    };
   }, [activeTab]);
 
   const navItems = [

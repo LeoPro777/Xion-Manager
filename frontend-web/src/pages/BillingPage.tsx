@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CreditCard, CheckCircle2, AlertTriangle, AlertCircle, Upload, ShieldCheck, Zap, Plus, Minus, ArrowRight, Receipt, ExternalLink, Clock } from 'lucide-react';
+import { CreditCard, CheckCircle2, AlertTriangle, AlertCircle, Upload, ShieldCheck, Zap, Plus, Minus, ArrowRight, Receipt, ExternalLink, Clock, RefreshCw } from 'lucide-react';
 import { api } from '../services/api';
 import { AccountStatus, BillingCycle, XionPayPlan } from '../types';
 import { SubscriptionRenewalModal } from '../components/SubscriptionRenewalModal';
@@ -19,6 +19,22 @@ export const BillingPage: React.FC<BillingPageProps> = ({ onNavigateToPaymentRep
   const [xionPayRate, setXionPayRate] = useState<number>(37.50);
   const [tenantStoreRate, setTenantStoreRate] = useState<number>(36.50);
   const [xionPayPlans, setXionPayPlans] = useState<XionPayPlan[]>([]);
+  const [isTogglingStatus, setIsTogglingStatus] = useState(false);
+
+  const handleToggleLiveStatus = async () => {
+    setIsTogglingStatus(true);
+    try {
+      await api.toggleXionPayStatus();
+      const newStatus = await api.getAccountStatus();
+      setStatus(newStatus);
+      const isSuspended = newStatus.traffic_light.status === 'SUSPENDED';
+      window.dispatchEvent(new CustomEvent('xion:account-status-updated', { detail: { isSuspended } }));
+    } catch (e: any) {
+      alert(e.message || 'Error al cambiar estado');
+    } finally {
+      setIsTogglingStatus(false);
+    }
+  };
 
   useEffect(() => {
     api.getAccountStatus().then(setStatus);
@@ -58,20 +74,32 @@ export const BillingPage: React.FC<BillingPageProps> = ({ onNavigateToPaymentRep
         {/* Left Panel: Account Health & Resource Usage */}
         <div className="lg:col-span-5 space-y-6">
           <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-5">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Salud de tu Cuenta</span>
-              <span className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 ${
-                status.traffic_light.status === 'SUSPENDED' || status.traffic_light.color === 'RED'
-                  ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-                  : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-              }`}>
-                {status.traffic_light.status === 'SUSPENDED' || status.traffic_light.color === 'RED' ? (
-                  <AlertCircle className="w-3.5 h-3.5" />
-                ) : (
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                )}
-                {status.traffic_light.label}
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleToggleLiveStatus}
+                  disabled={isTogglingStatus}
+                  className="px-2.5 py-1 rounded-xl text-[11px] font-bold border border-slate-700 bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white transition-all flex items-center gap-1.5 min-h-[36px]"
+                  title="Probar alternar bloqueo en tiempo real con 1 clic"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isTogglingStatus ? 'animate-spin text-cyan-400' : ''}`} />
+                  <span>{status.traffic_light.status === 'SUSPENDED' ? 'Desbloquear' : 'Bloquear (Prueba)'}</span>
+                </button>
+                <span className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 ${
+                  status.traffic_light.status === 'SUSPENDED' || status.traffic_light.color === 'RED'
+                    ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                    : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                }`}>
+                  {status.traffic_light.status === 'SUSPENDED' || status.traffic_light.color === 'RED' ? (
+                    <AlertCircle className="w-3.5 h-3.5" />
+                  ) : (
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                  )}
+                  {status.traffic_light.label}
+                </span>
+              </div>
             </div>
 
             <div>

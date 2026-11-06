@@ -1593,6 +1593,16 @@ export const api = {
     };
   },
 
+  async toggleXionPayStatus(targetStatus?: string): Promise<{ status: string; new_status: string; is_operational: boolean; is_active: boolean; message: string }> {
+    const url = targetStatus ? `/api/v1/xion-pay/toggle-status?target_status=${targetStatus}` : '/api/v1/xion-pay/toggle-status';
+    const res = await fetch(url, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Error al cambiar estado en Xion-Pay');
+    }
+    return await res.json();
+  },
+
   async reportPayment(_formData: FormData): Promise<{ message: string; report_id: string }> {
     return {
       message: 'Tu reporte de pago ha sido recibido con éxito y está en proceso de verificación.',
