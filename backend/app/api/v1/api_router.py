@@ -39,6 +39,7 @@ from app.models.entities import (
     SystemSettings as SystemSettingsModel,
     UserSession as UserSessionModel,
     UserPreference as UserPreferenceModel,
+    AuditLog as AuditLogModel,
     BusinessSubscription
 )
 from app.core.security import create_access_token, decode_access_token, verify_google_id_token, get_password_hash, verify_password
