@@ -861,7 +861,7 @@ export const api = {
     };
   },
 
-  async getStaffPairingStatus(pairingCode: string): Promise<{ status: 'PENDING' | 'APPROVED'; role?: Role; branch_id?: string; branch_name?: string }> {
+  async getStaffPairingStatus(pairingCode: string): Promise<{ status: 'PENDING' | 'APPROVED' | 'EXPIRED' | 'REJECTED'; message?: string; role?: Role; branch_id?: string; branch_name?: string }> {
     try {
       const res = await fetch(`/api/v1/staff/pairing-status/${pairingCode.toUpperCase().trim()}`);
       if (res.ok) {
@@ -891,7 +891,7 @@ export const api = {
       }
       return await res.json();
     } catch (e: any) {
-      if (e?.status === 429 || e?.message?.includes('Demasiados')) {
+      if (e?.status) {
         throw e;
       }
       // Offline fallback: registrar solicitud en PENDING (requiere aprobación del dueño)

@@ -92,7 +92,11 @@ xion_pay_state = {
 
 def is_system_operational() -> bool:
     """Verifica si el comercio se encuentra activo y no suspendido."""
-    if not xion_pay_state.get("is_active", True) or xion_pay_state.get("status") == "suspended" or xion_pay_state.get("license_status") == "suspended":
+    if (
+        not xion_pay_state.get("is_active", True)
+        or xion_pay_state.get("status") in ("suspended", "frozen")
+        or xion_pay_state.get("license_status") in ("suspended", "frozen")
+    ):
         return False
     return True
 
@@ -645,6 +649,50 @@ async def get_xion_pay_license_status():
         if live_status.get("trial_ends_at"):
             xion_pay_state["trial_ends_at"] = live_status.get("trial_ends_at")
     return live_status
+
+@api_router.post("/xion-pay/toggle-status")
+async def toggle_xion_pay_live_status(
+    target_status: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Endpoint directo para probar el bloqueo en tiempo real desde Xion-Manager.
+    Alterna o asigna el estado en Xion-Pay y sincroniza inmediatamente memoria y base de datos local.
+    """
+    biz_res = await db.execute(select(BusinessModel).limit(1))
+    biz = biz_res.scalar_one_or_none()
+    biz_identifier = biz.tax_id if (biz and biz.tax_id) else None
+
+    res = await XionPayService.toggle_status(tenant_id=biz_identifier, target_status=target_status)
+    if "error" in res:
+        raise HTTPException(status_code=400, detail=f"Error comunicando con Xion-Pay: {res.get('error')}")
+
+    new_status = res.get("status", "active")
+    is_blocked = new_status in ("frozen", "suspended") or res.get("is_suspended") is True
+
+    xion_pay_state["is_active"] = not is_blocked
+    xion_pay_state["status"] = "suspended" if is_blocked else new_status
+    xion_pay_state["license_status"] = "suspended" if is_blocked else new_status
+    xion_pay_state["suspension_reason"] = res.get("suspension_reason") if is_blocked else None
+
+    if biz:
+        biz.is_active = not is_blocked
+        biz.status = "suspended" if is_blocked else "active"
+        biz.suspension_reason = xion_pay_state["suspension_reason"]
+        await db.commit()
+
+    return {
+        "status": "success",
+        "new_status": new_status,
+        "is_operational": is_system_operational(),
+        "is_active": xion_pay_state["is_active"],
+        "message": "Comercio bloqueado/suspendido en tiempo real" if is_blocked else "Comercio reactivado y operativo en tiempo real"
+    }
+
+@api_router.post("/xion-pay/sync")
+async def sync_xion_pay_live_status(db: AsyncSession = Depends(get_db)):
+    """Sincroniza el estado de licencia y bloqueo directamente desde Xion-Pay."""
+    return await get_account_status(db=db)
 
 @api_router.post("/xion-pay/onboarding-trial", response_model=XionPayLeadResponse)
 async def onboard_trial_lead(lead: XionPayLeadCreate):
@@ -2161,6 +2209,12 @@ async def get_staff_pairing_status(pairing_code: str):
 
     for s in staff_pairings_db:
         if s["pairing_code"].upper() == code:
+            if s.get("status") == "REJECTED":
+                return {
+                    "status": "REJECTED",
+                    "pairing_code": code,
+                    "message": "La solicitud de vinculación fue rechazada por el administrador."
+                }
             exp_str = s.get("expires_at")
             if exp_str and s.get("status") == "PENDING":
                 try:
@@ -2206,6 +2260,10 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db:
         if s["pairing_code"].upper() == code:
             existing = s
             break
+
+    # Verificar si fue rechazada
+    if existing and existing.get("status") == "REJECTED":
+        raise HTTPException(status_code=400, detail="Esta solicitud de vinculación fue rechazada por el administrador. Solicita o genera un nuevo código.")
 
     # Verificar si expiró
     if existing and existing.get("expires_at"):
@@ -2383,8 +2441,12 @@ async def reject_staff_request(payload: dict = Body(...)):
     if not code.startswith("XM-") and code.isdigit():
         code = f"XM-{code}"
 
-    global staff_pairings_db
-    staff_pairings_db = [s for s in staff_pairings_db if s["pairing_code"].upper() != code]
+    for s in staff_pairings_db:
+        if s["pairing_code"].upper() == code:
+            s["status"] = "REJECTED"
+            s["rejected_at"] = datetime.utcnow().isoformat()
+            return {"status": "REJECTED", "message": f"Solicitud {code} descartada correctamente"}
+
     return {"status": "REJECTED", "message": f"Solicitud {code} descartada correctamente"}
 
 
@@ -2446,44 +2508,66 @@ async def get_account_status(db: AsyncSession = Depends(get_db)):
     days_remaining = max(0, (expires_at - datetime.utcnow()).days) if expires_at else 30
     sub_status = xion_pay_state.get("license_status", "active")
 
-    # Sincronizar con base de datos local
+    # Sincronizar en tiempo real con Xion-Pay
+    biz = None
     try:
         biz_res = await db.execute(select(BusinessModel).limit(1))
         biz = biz_res.scalar_one_or_none()
-        if biz:
-            if not biz.is_active or biz.status == "suspended":
+        biz_identifier = biz.tax_id if (biz and biz.tax_id) else None
+
+        live = await XionPayService.get_license_status(biz_identifier)
+        if live and live.get("status"):
+            live_status = live.get("status", "active")
+            is_blocked = (
+                live_status in ("suspended", "frozen")
+                or live.get("is_suspended") is True
+                or live.get("is_active") is False
+            )
+            if is_blocked:
                 sub_status = "suspended"
                 days_remaining = 0
-            elif biz.expires_at:
-                expires_at = biz.expires_at
-                days_remaining = max(0, (expires_at - datetime.utcnow()).days)
-            if biz.limits:
-                xion_pay_state["limits"] = biz.limits
-    except Exception:
-        pass
+                xion_pay_state["is_active"] = False
+                xion_pay_state["status"] = "suspended"
+                xion_pay_state["license_status"] = "suspended"
+                xion_pay_state["suspension_reason"] = live.get("suspension_reason") or "Servicio suspendido en Xion-Pay"
+                if biz and (biz.is_active or biz.status != "suspended"):
+                    biz.is_active = False
+                    biz.status = "suspended"
+                    biz.suspension_reason = xion_pay_state["suspension_reason"]
+                    await db.commit()
+            else:
+                sub_status = live_status
+                xion_pay_state["is_active"] = True
+                xion_pay_state["status"] = live_status
+                xion_pay_state["license_status"] = live_status
+                xion_pay_state["suspension_reason"] = None
+                if live.get("license_token"):
+                    xion_pay_state["license_token"] = live.get("license_token")
+                if biz and (not biz.is_active or biz.status == "suspended"):
+                    biz.is_active = True
+                    biz.status = "active"
+                    biz.suspension_reason = None
+                    await db.commit()
 
-    if sub_status != "suspended" and is_system_operational():
-        try:
-            live = await XionPayService.get_license_status()
-            if live and live.get("status"):
-                live_status = live.get("status", "active")
-                if live_status == "suspended":
-                    sub_status = "suspended"
-                sub_info = live.get("subscription") or {}
-                if sub_info.get("plan_name"):
-                    plan_name = sub_info.get("plan_name")
-                elif not xion_pay_state.get("plan_name") and live.get("commercial_name"):
-                    plan_name = f"Plan {live.get('commercial_name')}"
-                    
-                end_date_str = sub_info.get("current_period_end") or live.get("trial_ends_at")
-                if end_date_str and not xion_pay_state.get("expires_at"):
-                    clean_date = end_date_str.replace("Z", "+00:00")
-                    parsed_date = datetime.fromisoformat(clean_date)
-                    expires_at = parsed_date.replace(tzinfo=None)
-                    now_utc = datetime.utcnow()
-                    days_remaining = max(0, (expires_at - now_utc).days)
-        except Exception:
-            pass
+            sub_info = live.get("subscription") or {}
+            if sub_info.get("plan_name"):
+                plan_name = sub_info.get("plan_name")
+            elif not xion_pay_state.get("plan_name") and live.get("commercial_name"):
+                plan_name = f"Plan {live.get('commercial_name')}"
+                
+            end_date_str = sub_info.get("current_period_end") or live.get("trial_ends_at")
+            if end_date_str:
+                clean_date = end_date_str.replace("Z", "+00:00")
+                parsed_date = datetime.fromisoformat(clean_date)
+                expires_at = parsed_date.replace(tzinfo=None)
+                now_utc = datetime.utcnow()
+                days_remaining = max(0, (expires_at - now_utc).days)
+    except Exception as e:
+        logger.warning(f"Error sincronizando cuenta con Xion-Pay: {e}")
+        if biz:
+            if not biz.is_active or biz.status in ("suspended", "frozen"):
+                sub_status = "suspended"
+                days_remaining = 0
 
     is_suspended = (sub_status == "suspended") or (not is_system_operational())
     limits = xion_pay_state.get("limits") or {"max_branches": 2, "max_pos_registers": 4}

@@ -50,13 +50,14 @@ class XionPayService:
     @classmethod
     async def get_license_status(cls, tenant_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Consulta estado de licencia, días de prueba restantes y token RS256 en Xion-Pay.
+        Consulta estado de licencia, días de prueba restantes y token RS256 en Xion-Pay en tiempo real.
+        Acepta UUID del tenant o RIF fiscal (ej: J-50123456-7).
         """
-        tid = tenant_id or cls.get_default_tenant_id()
+        tid = tenant_id or cls.get_default_tenant_id() or "J-50123456-7"
         url = f"{cls.get_base_url()}/api/v1/tenants/{tid}/license-status"
         try:
             async with httpx.AsyncClient(timeout=settings.XION_PAY_TIMEOUT) as client:
-                res = await client.get(url)
+                res = await client.get(url, headers={"X-API-Key": getattr(settings, "XION_PAY_WEBHOOK_SECRET", "xion_pay_webhook_secret_key")})
                 if res.status_code == 200:
                     return res.json()
                 logger.warning(f"Xion-Pay license check failed [{res.status_code}]: {res.text}")
@@ -66,10 +67,45 @@ class XionPayService:
         return {
             "tenant_id": tid,
             "status": "active",
+            "is_active": True,
+            "is_suspended": False,
             "license_token": None,
             "subscription": {"status": "active", "plan_code": "pro", "current_period_end": None},
             "offline_cached": True
         }
+
+    @classmethod
+    async def toggle_status(
+        cls,
+        tenant_id: Optional[str] = None,
+        target_status: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Manipula o alterna (toggle) el estado del comercio en Xion-Pay en tiempo real (active <-> frozen).
+        """
+        tid = tenant_id or cls.get_default_tenant_id() or "J-50123456-7"
+        url = f"{cls.get_base_url()}/api/v1/tenants/{tid}/status"
+        payload = {}
+        if target_status:
+            payload["status"] = target_status
+        if reason:
+            payload["reason"] = reason
+
+        try:
+            async with httpx.AsyncClient(timeout=settings.XION_PAY_TIMEOUT) as client:
+                res = await client.post(
+                    url,
+                    json=payload,
+                    headers={"X-API-Key": getattr(settings, "XION_PAY_WEBHOOK_SECRET", "xion_pay_webhook_secret_key")}
+                )
+                if res.status_code == 200:
+                    return res.json()
+                logger.warning(f"Xion-Pay toggle status failed [{res.status_code}]: {res.text}")
+                return {"error": res.text, "status_code": res.status_code}
+        except Exception as e:
+            logger.error(f"Error toggling status in Xion-Pay: {e}")
+            return {"error": str(e)}
 
     @classmethod
     async def report_payment(cls, payload: Dict[str, Any]) -> Dict[str, Any]:

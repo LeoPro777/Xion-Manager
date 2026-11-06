@@ -4,7 +4,8 @@ import {
   ArrowRight, ArrowLeft, ShieldCheck, Zap, Plus, Trash2, 
   Sparkles, DollarSign, Percent, RefreshCw, Palette, Globe,
   Check, Store, ChevronRight, Crown, Boxes, Package, 
-  FileSpreadsheet, QrCode, Copy, KeyRound, Clock, Shield
+  FileSpreadsheet, QrCode, Copy, KeyRound, Clock, Shield,
+  Share2, AlertTriangle, XCircle, MessageCircle
 } from 'lucide-react';
 import { User, XionPayPlan, SystemPreferences, Role, Branch } from '../types';
 import { api, applySystemPreferences, DEFAULT_PREFERENCES } from '../services/api';
@@ -42,6 +43,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const [staffPairingQr, setStaffPairingQr] = useState<string>('');
   const [pairingSecondsLeft, setPairingSecondsLeft] = useState<number>(900); // 15 minutos
   const [isCopiedCode, setIsCopiedCode] = useState(false);
+  const [isCopiedShare, setIsCopiedShare] = useState(false);
+  const [pairingStatus, setPairingStatus] = useState<'PENDING' | 'APPROVED' | 'EXPIRED' | 'REJECTED'>('PENDING');
   const [manualPairingCode, setManualPairingCode] = useState('');
   const [submittedManualCode, setSubmittedManualCode] = useState<string | null>(null);
   const [selectedBranchId, setSelectedBranchId] = useState('branch-1');
@@ -157,6 +160,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         setStaffPairingCode(req.pairing_code);
         setStaffPairingQr(req.qr_payload);
         setPairingSecondsLeft(req.expires_in_seconds || 900);
+        setPairingStatus('PENDING');
       };
       generateNewCode();
     }
@@ -164,37 +168,102 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
   // Temporizador regresivo de 15 minutos
   useEffect(() => {
-    if (step !== 'STAFF_PAIRING' || pairingSecondsLeft <= 0) return;
+    if (step !== 'STAFF_PAIRING' || pairingSecondsLeft <= 0) {
+      if (step === 'STAFF_PAIRING' && pairingSecondsLeft <= 0 && pairingStatus === 'PENDING') {
+        setPairingStatus('EXPIRED');
+        setErrorMsg('El código de vinculación ha expirado. Por favor genera uno nuevo.');
+      }
+      return;
+    }
     const timer = setInterval(() => {
-      setPairingSecondsLeft((prev) => (prev > 0 ? prev - 1 : 0));
+      setPairingSecondsLeft((prev) => {
+        if (prev <= 1) {
+          setPairingStatus('EXPIRED');
+          setErrorMsg('El código de vinculación ha expirado. Por favor genera uno nuevo.');
+          return 0;
+        }
+        return prev - 1;
+      });
     }, 1000);
     return () => clearInterval(timer);
-  }, [step, pairingSecondsLeft]);
+  }, [step, pairingSecondsLeft, pairingStatus]);
 
   // Polling de aprobación en vivo si el propietario autoriza remotamente (sea por QR o código ingresado)
   useEffect(() => {
     const codeToPoll = submittedManualCode || staffPairingCode;
-    if (step !== 'STAFF_PAIRING' || !codeToPoll || pairingSecondsLeft <= 0) return;
+    if (step !== 'STAFF_PAIRING' || !codeToPoll || pairingSecondsLeft <= 0 || pairingStatus === 'APPROVED' || pairingStatus === 'EXPIRED') return;
     const interval = setInterval(async () => {
       try {
         const res = await api.getStaffPairingStatus(codeToPoll);
         if (res.status === 'APPROVED') {
+          setPairingStatus('APPROVED');
           handleExecuteStaffConnection(
             res.branch_id || selectedBranchId,
             res.branch_name || 'Sucursal Asignada',
             res.role || selectedStaffRole
           );
+        } else if (res.status === 'REJECTED') {
+          setPairingStatus('REJECTED');
+          setErrorMsg(res.message || 'La solicitud de vinculación fue rechazada por el administrador.');
+          setSubmittedManualCode(null);
+          setPairingSuccessMsg(null);
+        } else if (res.status === 'EXPIRED') {
+          setPairingStatus('EXPIRED');
+          setErrorMsg(res.message || 'El código de vinculación ha expirado. Por favor genera uno nuevo.');
         }
       } catch {}
     }, 3500);
     return () => clearInterval(interval);
-  }, [step, staffPairingCode, submittedManualCode, pairingSecondsLeft]);
+  }, [step, staffPairingCode, submittedManualCode, pairingSecondsLeft, pairingStatus]);
 
   const handleCopyCode = () => {
     if (!staffPairingCode) return;
     navigator.clipboard.writeText(staffPairingCode);
     setIsCopiedCode(true);
     setTimeout(() => setIsCopiedCode(false), 2500);
+  };
+
+  const handleRegenerateStaffCode = async () => {
+    setErrorMsg(null);
+    setPairingSuccessMsg(null);
+    setIsPairingStaff(true);
+    try {
+      const randomNum = Math.floor(100 + Math.random() * 900);
+      const code = `XM-${randomNum}`;
+      const req = await api.requestStaffPairing({
+        user_id: currentUser.id,
+        email: currentUser.email,
+        full_name: currentUser.full_name,
+        role: selectedStaffRole,
+        pairing_code: code
+      });
+      setStaffPairingCode(req.pairing_code);
+      setStaffPairingQr(req.qr_payload);
+      setPairingSecondsLeft(req.expires_in_seconds || 900);
+      setPairingStatus('PENDING');
+      setSubmittedManualCode(null);
+    } catch (err: any) {
+      setErrorMsg('Error al generar nuevo código. Intenta nuevamente.');
+    } finally {
+      setIsPairingStaff(false);
+    }
+  };
+
+  const handleShareWhatsApp = () => {
+    if (!staffPairingCode) return;
+    const roleName = getRoleLabel(selectedStaffRole);
+    const text = `Hola, solicito acceso a Xion Manager como ${roleName}. Mi código de vinculación es: ${staffPairingCode}`;
+    const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
+  };
+
+  const handleCopyShareText = () => {
+    if (!staffPairingCode) return;
+    const roleName = getRoleLabel(selectedStaffRole);
+    const text = `Hola, solicito acceso a Xion Manager como ${roleName}. Mi código de vinculación es: ${staffPairingCode}`;
+    navigator.clipboard.writeText(text);
+    setIsCopiedShare(true);
+    setTimeout(() => setIsCopiedShare(false), 2500);
   };
 
   const handleExecuteStaffConnection = (branchId: string, branchName: string, role: Role) => {
@@ -224,7 +293,10 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     setErrorMsg(null);
     setPairingSuccessMsg(null);
 
-    const cleanCode = manualPairingCode.trim().toUpperCase();
+    let cleanCode = manualPairingCode.trim().toUpperCase();
+    if (!cleanCode.startsWith('XM-') && /^\d+$/.test(cleanCode)) {
+      cleanCode = `XM-${cleanCode}`;
+    }
 
     try {
       const res = await api.confirmStaffPairing({
@@ -235,6 +307,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
       });
 
       if (res.status === 'APPROVED') {
+        setPairingStatus('APPROVED');
         handleExecuteStaffConnection(
           res.branch_id,
           res.branch_name,
@@ -244,6 +317,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         // En estado PENDING: Espera explícita de autorización del Propietario
         setIsPairingStaff(false);
         setSubmittedManualCode(cleanCode);
+        setPairingStatus('PENDING');
         setPairingSuccessMsg(res.message || 'Solicitud enviada. Esperando que el Propietario autorice el acceso desde Usuarios.');
       }
     } catch (err: any) {
@@ -667,64 +741,141 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
               {/* MODO 1: Generar Código y QR (Flujo Smart TV de Cajas) */}
               {staffPairingTab === 'GENERATE_QR' && (
-                <div className="bg-slate-950/70 p-5 sm:p-6 rounded-3xl border border-slate-800/80 space-y-5 text-center">
+                <div className="bg-slate-950/70 p-4 sm:p-6 rounded-3xl border border-slate-800/80 space-y-4 sm:space-y-5 text-center">
                   
                   <div className="space-y-1">
                     <h4 className="text-sm sm:text-base font-extrabold text-white">
                       Código de Solicitud de Vinculación
                     </h4>
                     <p className="text-xs text-slate-400 max-w-md mx-auto">
-                      Muestra este código o el código QR al <strong className="text-cyan-300">Propietario</strong> de tu comercio para que apruebe tu acceso desde el panel de Usuarios.
+                      Presenta este código o el código QR al <strong className="text-cyan-300">Propietario</strong> para que autorice tu acceso desde el panel de Usuarios.
                     </p>
                   </div>
 
-                  {/* QR y Display de Código */}
-                  <div className="flex flex-col sm:flex-row items-center justify-center gap-6 py-2">
-                    {/* Código QR Vectorial */}
-                    <div className="flex flex-col items-center gap-2">
-                      <QrCodeSvg 
-                        value={staffPairingQr || `xion://pair-staff?code=${staffPairingCode}&role=${selectedStaffRole}`}
-                        size={170}
-                        logoText={selectedStaffRole === 'SUPERVISOR' ? 'ALM' : selectedStaffRole === 'BRANCH_MANAGER' ? 'GER' : 'CON'}
-                      />
-                      <span className="text-[10px] text-slate-500 font-mono">
-                        Escanear con App o Cámara Móvil
-                      </span>
+                  {/* Alerta de Expiración */}
+                  {pairingStatus === 'EXPIRED' && (
+                    <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/40 text-amber-300 space-y-2 text-center animate-in fade-in">
+                      <div className="flex items-center justify-center gap-2 font-bold text-sm">
+                        <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+                        <span>Código Expirado</span>
+                      </div>
+                      <p className="text-xs text-slate-300">
+                        El tiempo límite de 15 minutos ha vencido. Genera un nuevo código para vincularte.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleRegenerateStaffCode}
+                        disabled={isPairingStaff}
+                        className="mt-2 w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 font-black text-xs shadow-lg shadow-amber-500/20 inline-flex items-center justify-center gap-2 transition-all active:scale-95 min-h-[44px]"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${isPairingStaff ? 'animate-spin' : ''}`} />
+                        <span>Generar Nuevo Código</span>
+                      </button>
                     </div>
+                  )}
 
-                    {/* Código Alfanumérico Grande */}
-                    <div className="space-y-3 flex flex-col items-center sm:items-start text-center sm:text-left">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                        Código de 6 Caracteres
-                      </span>
-                      
-                      <div className="inline-flex items-center gap-3 p-3 px-5 rounded-2xl bg-slate-900 border-2 border-cyan-500/50 shadow-xl shadow-cyan-500/10">
-                        <span className="font-mono text-3xl sm:text-4xl font-black text-cyan-400 tracking-widest">
-                          {staffPairingCode || 'XM-842'}
-                        </span>
+                  {/* Alerta de Rechazo */}
+                  {pairingStatus === 'REJECTED' && (
+                    <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/40 text-red-300 space-y-2 text-center animate-in fade-in">
+                      <div className="flex items-center justify-center gap-2 font-bold text-sm">
+                        <XCircle className="w-5 h-5 text-red-400 shrink-0" />
+                        <span>Solicitud Rechazada o Descartada</span>
+                      </div>
+                      <p className="text-xs text-slate-300">
+                        El administrador ha descartado esta solicitud de vinculación.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleRegenerateStaffCode}
+                        disabled={isPairingStaff}
+                        className="mt-2 w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-400 hover:to-rose-500 text-white font-bold text-xs shadow-lg shadow-red-500/20 inline-flex items-center justify-center gap-2 transition-all active:scale-95 min-h-[44px]"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${isPairingStaff ? 'animate-spin' : ''}`} />
+                        <span>Generar Nuevo Código para Reintentar</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* QR y Display de Código (Cuando está activo o pendiente) */}
+                  {pairingStatus !== 'EXPIRED' && pairingStatus !== 'REJECTED' && (
+                    <>
+                      <div className="flex flex-col sm:flex-row items-center justify-center gap-5 sm:gap-6 py-2">
+                        {/* Código QR Vectorial */}
+                        <div className="flex flex-col items-center gap-2">
+                          <QrCodeSvg 
+                            value={staffPairingQr || `xion://pair-staff?code=${staffPairingCode}&role=${selectedStaffRole}`}
+                            size={160}
+                            logoText={selectedStaffRole === 'SUPERVISOR' ? 'ALM' : selectedStaffRole === 'BRANCH_MANAGER' ? 'GER' : 'CON'}
+                          />
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            Escanear con App o Cámara Móvil
+                          </span>
+                        </div>
+
+                        {/* Código Alfanumérico Grande y Controles */}
+                        <div className="space-y-3 flex flex-col items-center sm:items-start text-center sm:text-left w-full sm:w-auto">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                            Código de Vinculación
+                          </span>
+                          
+                          <div className="inline-flex items-center gap-2 sm:gap-3 p-2.5 sm:p-3 px-4 sm:px-5 rounded-2xl bg-slate-900 border-2 border-cyan-500/50 shadow-xl shadow-cyan-500/10">
+                            <span className="font-mono text-2xl sm:text-4xl font-black text-cyan-400 tracking-widest">
+                              {staffPairingCode || 'XM-842'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleCopyCode}
+                              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all min-w-[36px] min-h-[36px] flex items-center justify-center"
+                              title="Copiar código"
+                            >
+                              {isCopiedCode ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleRegenerateStaffCode}
+                              disabled={isPairingStaff}
+                              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all min-w-[36px] min-h-[36px] flex items-center justify-center"
+                              title="Generar otro código"
+                            >
+                              <RefreshCw className={`w-4 h-4 ${isPairingStaff ? 'animate-spin text-cyan-400' : ''}`} />
+                            </button>
+                          </div>
+
+                          {/* Temporizador */}
+                          <div className="flex items-center gap-2 text-xs text-slate-400">
+                            <Clock className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Válido por: <strong className="text-white font-mono">{formatCountdown(pairingSecondsLeft)}</strong></span>
+                          </div>
+
+                          {/* Radar de Estado en Vivo */}
+                          <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 text-xs">
+                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                            <span className="text-[11px] font-semibold">Esperando autorización del Propietario en vivo...</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Botones de Compartir Móvil (WhatsApp / Mensaje) */}
+                      <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-2.5 max-w-md mx-auto">
                         <button
                           type="button"
-                          onClick={handleCopyCode}
-                          className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all"
-                          title="Copiar código"
+                          onClick={handleShareWhatsApp}
+                          className="w-full sm:w-auto flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all active:scale-95 min-h-[44px]"
                         >
-                          {isCopiedCode ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                          <MessageCircle className="w-4 h-4" />
+                          <span>Enviar por WhatsApp al Dueño</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCopyShareText}
+                          className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700 flex items-center justify-center gap-2 transition-all active:scale-95 min-h-[44px]"
+                        >
+                          {isCopiedShare ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4" />}
+                          <span>{isCopiedShare ? '¡Texto Copiado!' : 'Copiar Solicitud'}</span>
                         </button>
                       </div>
-
-                      {/* Temporizador */}
-                      <div className="flex items-center gap-2 text-xs text-slate-400">
-                        <Clock className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Válido por: <strong className="text-white font-mono">{formatCountdown(pairingSecondsLeft)}</strong></span>
-                      </div>
-
-                      {/* Radar de Estado en Vivo */}
-                      <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 text-xs">
-                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
-                        <span className="text-[11px] font-semibold">Esperando autorización del Propietario...</span>
-                      </div>
-                    </div>
-                  </div>
+                    </>
+                  )}
 
                   {/* Acciones de Prueba Rápida y Simulación */}
                   <div className="pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -735,7 +886,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                       type="button"
                       disabled={isPairingStaff}
                       onClick={() => handleSimulateOwnerApproval()}
-                      className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center gap-2 transition-all active:scale-95"
+                      className="w-full sm:w-auto px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center justify-center gap-2 transition-all active:scale-95 min-h-[44px] sm:min-h-0"
                     >
                       <Zap className="w-3.5 h-3.5 fill-white" />
                       <span>{isPairingStaff ? 'Vinculando...' : 'Simular Aprobación Inmediata del Propietario'}</span>
@@ -748,7 +899,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
               {/* MODO 2: Introducir Código Manual */}
               {staffPairingTab === 'ENTER_CODE' && (
                 submittedManualCode ? (
-                  <div className="bg-slate-950/70 p-6 rounded-3xl border border-cyan-500/30 text-center space-y-4 animate-in fade-in">
+                  <div className="bg-slate-950/70 p-5 sm:p-6 rounded-3xl border border-cyan-500/30 text-center space-y-4 animate-in fade-in">
                     <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mx-auto">
                       <Clock className="w-6 h-6 animate-pulse" />
                     </div>
@@ -757,7 +908,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                         Solicitud de Vinculación en Espera
                       </h4>
                       <p className="text-xs text-slate-300 mt-1 max-w-md mx-auto">
-                        El código <span className="font-mono text-cyan-400 font-bold">{submittedManualCode}</span> ha sido registrado. Debes esperar a que el <strong className="text-white">Propietario</strong> autorice tu vinculación desde el panel de Usuarios.
+                        El código <span className="font-mono text-cyan-400 font-bold">{submittedManualCode}</span> ha sido registrado. Esperando que el <strong className="text-white">Propietario</strong> autorice tu vinculación desde Usuarios.
                       </p>
                     </div>
 
@@ -772,8 +923,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                         onClick={() => {
                           setSubmittedManualCode(null);
                           setPairingSuccessMsg(null);
+                          setPairingStatus('PENDING');
                         }}
-                        className="text-xs text-slate-400 hover:text-slate-200 underline"
+                        className="text-xs text-slate-400 hover:text-slate-200 underline min-h-[44px] flex items-center justify-center"
                       >
                         ← Introducir otro código
                       </button>
@@ -782,7 +934,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                         type="button"
                         disabled={isPairingStaff}
                         onClick={() => handleSimulateOwnerApproval(submittedManualCode)}
-                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center gap-2 transition-all active:scale-95"
+                        className="w-full sm:w-auto px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center justify-center gap-2 transition-all active:scale-95 min-h-[44px]"
                       >
                         <Zap className="w-3.5 h-3.5 fill-white" />
                         <span>Simular Aprobación Inmediata</span>
@@ -790,7 +942,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <form onSubmit={handleManualPairSubmit} className="bg-slate-950/70 p-5 sm:p-6 rounded-3xl border border-slate-800/80 space-y-4">
+                  <form onSubmit={handleManualPairSubmit} className="bg-slate-950/70 p-4 sm:p-6 rounded-3xl border border-slate-800/80 space-y-4">
                     <div className="space-y-1">
                       <h4 className="text-sm sm:text-base font-extrabold text-white">
                         Ingresa el Código Proporcionado por el Propietario
@@ -800,25 +952,28 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                       </p>
                     </div>
 
-                    {/* Input de 6 Caracteres */}
+                    {/* Input de Caracteres Optimizado para Móvil */}
                     <div className="py-2 text-center space-y-2">
                       <input
                         type="text"
                         required
-                        maxLength={8}
+                        maxLength={10}
                         placeholder="XM-842"
+                        autoCapitalize="characters"
+                        autoCorrect="off"
+                        spellCheck={false}
                         value={manualPairingCode}
                         onChange={(e) => setManualPairingCode(e.target.value.toUpperCase())}
-                        className="w-56 mx-auto text-center font-mono text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-2xl py-3 px-4 text-cyan-400 focus:outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-500/20 uppercase block"
+                        className="w-full sm:w-60 mx-auto text-center font-mono text-2xl sm:text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-2xl py-3 px-4 text-cyan-400 focus:outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-500/20 uppercase block min-h-[48px]"
                       />
-                      <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500">
-                        <span>Códigos demo disponibles:</span>
-                        {['XM-792', 'XION-01', 'ALMACEN-1'].map((c) => (
+                      <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-slate-500 pt-1">
+                        <span>Códigos demo:</span>
+                        {['XM-792', 'XM-777', 'XION-01'].map((c) => (
                           <button
                             key={c}
                             type="button"
                             onClick={() => setManualPairingCode(c)}
-                            className="px-2 py-0.5 rounded-md bg-slate-800 text-cyan-300 font-mono text-[10px] hover:bg-slate-700"
+                            className="px-2.5 py-1 rounded-md bg-slate-800 text-cyan-300 font-mono text-[11px] hover:bg-slate-700 active:scale-95 transition-all"
                           >
                             {c}
                           </button>
@@ -832,7 +987,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                       <select
                         value={selectedBranchId}
                         onChange={(e) => setSelectedBranchId(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2.5 text-slate-100 font-semibold focus:outline-none focus:border-cyan-400"
+                        className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2.5 text-slate-100 font-semibold focus:outline-none focus:border-cyan-400 min-h-[44px]"
                       >
                         {branchesList.map((b) => (
                           <option key={b.id} value={b.id}>
@@ -847,7 +1002,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                       <button
                         type="submit"
                         disabled={isPairingStaff || !manualPairingCode.trim()}
-                        className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/25 flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                        className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/25 flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 min-h-[44px]"
                       >
                         <span>{isPairingStaff ? 'Enviando Solicitud...' : 'Enviar Solicitud al Propietario'}</span>
                         <ArrowRight className="w-4 h-4" />
