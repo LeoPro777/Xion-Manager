@@ -33,6 +33,13 @@ import {
   SupplierPayableLedgerItem
 } from '../types';
 
+function authHeaders(extraHeaders: Record<string, string> = {}): Record<string, string> {
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('xion_access_token') : null;
+  return {
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    ...extraHeaders
+  };
+}
 
 let mockInventory: ProductInventory[] = [];
 
@@ -463,7 +470,7 @@ export const api = {
     try {
       const res = await fetch('/api/v1/onboarding/complete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload)
       });
       if (!res.ok) {
@@ -657,7 +664,9 @@ export const api = {
   // 2. Branches & Cash Registers
   async getBranches(): Promise<Branch[]> {
     try {
-      const res = await fetch('/api/v1/branches');
+      const res = await fetch('/api/v1/branches', {
+        headers: authHeaders()
+      });
       if (res.ok) {
         const data = await res.json();
         mockBranches = data;
@@ -673,7 +682,7 @@ export const api = {
     try {
       const res = await fetch('/api/v1/branches', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(branchData)
       });
       if (res.ok) {
@@ -734,7 +743,9 @@ export const api = {
   async getCashRegisters(branchId?: string): Promise<CashRegister[]> {
     try {
       const url = branchId && branchId !== 'all' ? `/api/v1/cash-registers?branch_id=${branchId}` : '/api/v1/cash-registers';
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        headers: authHeaders()
+      });
       if (res.ok) {
         const data = await res.json();
         mockCashRegisters = data;
@@ -753,7 +764,7 @@ export const api = {
     try {
       const res = await fetch('/api/v1/cash-registers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(registerData)
       });
       if (res.ok) {
@@ -978,7 +989,7 @@ export const api = {
     try {
       const res = await fetch('/api/v1/staff/approve-request', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ pairing_code: pairingCode, branch_id: branchId, role })
       });
       if (res.ok) {
@@ -1488,7 +1499,9 @@ export const api = {
   // 5. Users & Approvals
   async getUsers(): Promise<User[]> {
     try {
-      const res = await fetch('/api/v1/users');
+      const res = await fetch('/api/v1/users', {
+        headers: authHeaders()
+      });
       if (res.ok) {
         return await res.json();
       }
@@ -1502,7 +1515,7 @@ export const api = {
     try {
       const res = await fetch('/api/v1/users/approval', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ user_id: userId, status })
       });
       if (res.ok) {
@@ -1522,7 +1535,7 @@ export const api = {
     try {
       const res = await fetch(`/api/v1/users/${userId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(data)
       });
       if (res.ok) {
@@ -1588,7 +1601,9 @@ export const api = {
   // 9. Billing & Xion-Pay
   async getAccountStatus(): Promise<AccountStatus> {
     try {
-      const res = await fetch('/api/v1/billing/account-status');
+      const res = await fetch('/api/v1/billing/account-status', {
+        headers: authHeaders()
+      });
       if (res.ok) {
         return await res.json();
       }

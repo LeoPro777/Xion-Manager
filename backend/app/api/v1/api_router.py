@@ -160,19 +160,26 @@ xion_pay_plans_db: List[dict] = [
 ]
 
 @api_router.get("/settings/exchange-rate", response_model=SystemSettingsResponse)
-async def get_exchange_rate(db: AsyncSession = Depends(get_db)):
+async def get_exchange_rate(
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Retorna la configuración cambiaria y fiscal del negocio desde Supabase.
-    Si no existe registro previo, inicializa uno con los valores corporativos.
+    Retorna la configuración cambiaria y fiscal del negocio desde Supabase con aislamiento multi-tenant.
+    Si no existe registro previo, inicializa uno con los valores corporativos para este tenant.
     """
     try:
-        res = await db.execute(select(SystemSettingsModel).limit(1))
-        setting = res.scalar_one_or_none()
-        if not setting:
-            biz_res = await db.execute(select(BusinessModel).limit(1))
-            biz = biz_res.scalar_one_or_none()
-            biz_id = biz.id if biz else "biz-101"
+        current_user = await get_optional_current_user(authorization, db)
+        biz_id = current_user.business_id if current_user else None
 
+        if biz_id:
+            res = await db.execute(select(SystemSettingsModel).where(SystemSettingsModel.business_id == biz_id))
+            setting = res.scalar_one_or_none()
+        else:
+            res = await db.execute(select(SystemSettingsModel).limit(1))
+            setting = res.scalar_one_or_none()
+
+        if not setting and biz_id:
             setting = SystemSettingsModel(
                 business_id=biz_id,
                 current_exchange_rate_bs=global_settings["current_exchange_rate_bs"],
@@ -186,42 +193,42 @@ async def get_exchange_rate(db: AsyncSession = Depends(get_db)):
             await db.commit()
             await db.refresh(setting)
 
-        # Sincronizar estado en memoria
-        global_settings["id"] = str(setting.id)
-        global_settings["business_id"] = str(setting.business_id)
-        global_settings["current_exchange_rate_bs"] = float(setting.current_exchange_rate_bs)
-        global_settings["tax_rate"] = float(setting.tax_rate)
-        global_settings["enable_taxes"] = bool(setting.enable_taxes)
-        global_settings["auto_sync_pos"] = bool(setting.auto_sync_pos)
-        global_settings["currency_symbol"] = str(setting.currency_symbol)
-        global_settings["updated_at"] = setting.updated_at or datetime.utcnow()
-
-        return {
-            "id": str(setting.id),
-            "business_id": str(setting.business_id),
-            "current_exchange_rate_bs": float(setting.current_exchange_rate_bs),
-            "tax_rate": float(setting.tax_rate),
-            "enable_taxes": bool(setting.enable_taxes),
-            "auto_sync_pos": bool(setting.auto_sync_pos),
-            "currency_symbol": str(setting.currency_symbol),
-            "updated_at": setting.updated_at or datetime.utcnow()
-        }
-    except Exception as e:
-        return global_settings
+        if setting:
+            return {
+                "id": str(setting.id),
+                "business_id": str(setting.business_id),
+                "current_exchange_rate_bs": float(setting.current_exchange_rate_bs),
+                "tax_rate": float(setting.tax_rate),
+                "enable_taxes": bool(setting.enable_taxes),
+                "auto_sync_pos": bool(setting.auto_sync_pos),
+                "currency_symbol": str(setting.currency_symbol),
+                "updated_at": setting.updated_at or datetime.utcnow()
+            }
+    except Exception:
+        pass
+    return global_settings
 
 @api_router.put("/settings/exchange-rate", response_model=SystemSettingsResponse)
-async def update_exchange_rate(payload: SystemSettingsUpdate, db: AsyncSession = Depends(get_db)):
+async def update_exchange_rate(
+    payload: SystemSettingsUpdate,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Actualiza la tasa oficial y configuración fiscal en Supabase con persistencia inmediata.
+    Actualiza la tasa oficial y configuración fiscal en Supabase con persistencia inmediata para el tenant correspondiente.
     """
     try:
-        res = await db.execute(select(SystemSettingsModel).limit(1))
-        setting = res.scalar_one_or_none()
-        if not setting:
-            biz_res = await db.execute(select(BusinessModel).limit(1))
-            biz = biz_res.scalar_one_or_none()
-            biz_id = biz.id if biz else "biz-101"
+        current_user = await get_optional_current_user(authorization, db)
+        biz_id = current_user.business_id if current_user else None
 
+        if biz_id:
+            res = await db.execute(select(SystemSettingsModel).where(SystemSettingsModel.business_id == biz_id))
+            setting = res.scalar_one_or_none()
+        else:
+            res = await db.execute(select(SystemSettingsModel).limit(1))
+            setting = res.scalar_one_or_none()
+
+        if not setting and biz_id:
             setting = SystemSettingsModel(
                 business_id=biz_id,
                 current_exchange_rate_bs=payload.current_exchange_rate_bs,
@@ -232,7 +239,7 @@ async def update_exchange_rate(payload: SystemSettingsUpdate, db: AsyncSession =
                 updated_at=datetime.utcnow()
             )
             db.add(setting)
-        else:
+        elif setting:
             setting.current_exchange_rate_bs = payload.current_exchange_rate_bs
             setting.tax_rate = payload.tax_rate
             setting.enable_taxes = payload.enable_taxes
@@ -240,38 +247,23 @@ async def update_exchange_rate(payload: SystemSettingsUpdate, db: AsyncSession =
             setting.currency_symbol = payload.currency_symbol
             setting.updated_at = datetime.utcnow()
 
-        await db.commit()
-        await db.refresh(setting)
+        if setting:
+            await db.commit()
+            await db.refresh(setting)
+            return {
+                "id": str(setting.id),
+                "business_id": str(setting.business_id),
+                "current_exchange_rate_bs": float(setting.current_exchange_rate_bs),
+                "tax_rate": float(setting.tax_rate),
+                "enable_taxes": bool(setting.enable_taxes),
+                "auto_sync_pos": bool(setting.auto_sync_pos),
+                "currency_symbol": str(setting.currency_symbol),
+                "updated_at": setting.updated_at or datetime.utcnow()
+            }
+    except Exception:
+        pass
+    return global_settings
 
-        # Sincronizar estado en memoria
-        global_settings["id"] = str(setting.id)
-        global_settings["business_id"] = str(setting.business_id)
-        global_settings["current_exchange_rate_bs"] = float(setting.current_exchange_rate_bs)
-        global_settings["tax_rate"] = float(setting.tax_rate)
-        global_settings["enable_taxes"] = bool(setting.enable_taxes)
-        global_settings["auto_sync_pos"] = bool(setting.auto_sync_pos)
-        global_settings["currency_symbol"] = str(setting.currency_symbol)
-        global_settings["updated_at"] = setting.updated_at or datetime.utcnow()
-
-        return {
-            "id": str(setting.id),
-            "business_id": str(setting.business_id),
-            "current_exchange_rate_bs": float(setting.current_exchange_rate_bs),
-            "tax_rate": float(setting.tax_rate),
-            "enable_taxes": bool(setting.enable_taxes),
-            "auto_sync_pos": bool(setting.auto_sync_pos),
-            "currency_symbol": str(setting.currency_symbol),
-            "updated_at": setting.updated_at or datetime.utcnow()
-        }
-    except Exception as e:
-        # Fallback de seguridad en memoria si hay interrupción transitoria de red
-        global_settings["current_exchange_rate_bs"] = payload.current_exchange_rate_bs
-        global_settings["tax_rate"] = payload.tax_rate
-        global_settings["enable_taxes"] = payload.enable_taxes
-        global_settings["auto_sync_pos"] = payload.auto_sync_pos
-        global_settings["currency_symbol"] = payload.currency_symbol
-        global_settings["updated_at"] = datetime.utcnow()
-        return global_settings
 
 # --- Xion-Pay Dedicated Endpoints ---
 @api_router.get("/xion-pay/config", response_model=XionPayConfigResponse)
@@ -853,11 +845,34 @@ async def get_current_user_and_session(
     return user, session
 
 
+async def get_optional_current_user(
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+) -> Optional[UserModel]:
+    """
+    Retorna el usuario actual si el header Authorization Bearer es provisto y válido.
+    Permite aislamiento multi-tenant en endpoints públicos u opcionales.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    try:
+        token = authorization.split(" ")[1]
+        claims = decode_access_token(token)
+        if not claims or "sub" not in claims:
+            return None
+        user_id = claims["sub"]
+        user_res = await db.execute(select(UserModel).where(UserModel.id == user_id, UserModel.is_active == True))
+        return user_res.scalar_one_or_none()
+    except Exception:
+        return None
+
+
 @api_router.post("/auth/google", response_model=AuthTokenResponse)
 async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """
     Autenticación con Google Identity Services (OAuth2).
     Verifica el token de Google y emite un JWT firmado para la sesión de Xion-Manager con registro de sesión.
+    Si el usuario es nuevo, crea un nuevo Tenant / Negocio independiente siguiendo el estándar multi-tenant.
     """
     google_data = await verify_google_id_token(payload.id_token)
     email = google_data["email"].lower().strip()
@@ -867,40 +882,54 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
     result = await db.execute(select(UserModel).where(UserModel.email == email))
     user = result.scalar_one_or_none()
 
+    is_new_user = False
     if not user:
-        biz_result = await db.execute(select(BusinessModel).limit(1))
-        biz = biz_result.scalar_one_or_none()
-        if not biz:
-            biz = BusinessModel(
-                id="biz-101",
-                legal_name="Comercializadora Xion C.A.",
-                trade_name="Xion Supermarket & Retail",
-                tax_id="J-12345678-9",
-                phone="+58 414-1112233",
-                email="contacto@xion.com",
-                is_active=True
-            )
-            db.add(biz)
-            await db.commit()
-            await db.refresh(biz)
+        is_new_user = True
+        # Cada nuevo usuario crea su propio Tenant / Negocio aislado con ID y RIF único provisional
+        new_biz_id = f"biz-{uuid.uuid4().hex[:12]}"
+        provisional_tax_id = f"J-TMP-{uuid.uuid4().hex[:8].upper()}"
+        provisional_biz_email = email
+        biz_check = await db.execute(select(BusinessModel).where(BusinessModel.email == email))
+        if biz_check.scalar_one_or_none():
+            provisional_biz_email = f"empresa-{uuid.uuid4().hex[:6]}@{email.split('@')[-1] if '@' in email else 'xion.com'}"
 
-        business_id = biz.id
-        users_count_res = await db.execute(select(UserModel))
-        users_count = len(users_count_res.scalars().all())
-        role = "OWNER" if users_count == 0 else "ADMIN"
+        biz = BusinessModel(
+            id=new_biz_id,
+            legal_name=f"Empresa de {name}",
+            trade_name="Mi Comercio",
+            tax_id=provisional_tax_id,
+            phone="+58 414-0000000",
+            email=provisional_biz_email,
+            is_active=True,
+            status="active"
+        )
+        db.add(biz)
+        await db.flush()
+
+        sys_setting = SystemSettingsModel(
+            business_id=biz.id,
+            current_exchange_rate_bs=36.50,
+            tax_rate=16.00,
+            enable_taxes=True,
+            auto_sync_pos=True,
+            currency_symbol="Bs.",
+            updated_at=datetime.utcnow()
+        )
+        db.add(sys_setting)
 
         user = UserModel(
             email=email,
             hashed_password=get_password_hash("oauth2-google-managed"),
             full_name=name,
-            role=role,
-            business_id=business_id,
+            role="OWNER",
+            business_id=biz.id,
             approval_status="APPROVED",
             is_active=True
         )
         db.add(user)
         await db.commit()
         await db.refresh(user)
+        await db.refresh(biz)
 
     if not user.is_active:
         raise HTTPException(
@@ -924,6 +953,7 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
+            "onboarding_completed": not is_new_user,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
         },
@@ -1013,6 +1043,7 @@ async def login_standard(payload: StandardLoginRequest, request: Request, db: As
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
+            "onboarding_completed": not is_new_user,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
         },
@@ -1044,36 +1075,54 @@ async def register_user(payload: RegisterUserRequest, request: Request, db: Asyn
             detail="Ya existe una cuenta registrada con este correo electrónico."
         )
 
-    # Negocio predeterminado
-    biz_result = await db.execute(select(BusinessModel).limit(1))
-    biz = biz_result.scalar_one_or_none()
-    if not biz:
-        biz = BusinessModel(
-            id="biz-101",
-            legal_name="Nueva Empresa",
-            trade_name="Mi Negocio",
-            tax_id="J-00000000-0",
-            phone=payload.phone or "+58 414-1112233",
-            email=email,
-            is_active=True
-        )
-        db.add(biz)
-        await db.commit()
-        await db.refresh(biz)
+    # 1. Crear nuevo Tenant / Negocio independiente (Patrón Multi-Tenant SaaS)
+    new_biz_id = f"biz-{uuid.uuid4().hex[:12]}"
+    provisional_tax_id = f"J-TMP-{uuid.uuid4().hex[:8].upper()}"
+    provisional_biz_email = email
+    biz_check = await db.execute(select(BusinessModel).where(BusinessModel.email == email))
+    if biz_check.scalar_one_or_none():
+        provisional_biz_email = f"empresa-{uuid.uuid4().hex[:6]}@{email.split('@')[-1] if '@' in email else 'xion.com'}"
 
+    new_biz = BusinessModel(
+        id=new_biz_id,
+        legal_name=f"Empresa de {payload.full_name}",
+        trade_name="Mi Comercio",
+        tax_id=provisional_tax_id,
+        phone=payload.phone or "+58 414-0000000",
+        email=provisional_biz_email,
+        is_active=True,
+        status="active"
+    )
+    db.add(new_biz)
+    await db.flush()
+
+    # 2. Inicializar parámetros del sistema para este tenant
+    sys_setting = SystemSettingsModel(
+        business_id=new_biz.id,
+        current_exchange_rate_bs=36.50,
+        tax_rate=16.00,
+        enable_taxes=True,
+        auto_sync_pos=True,
+        currency_symbol="Bs.",
+        updated_at=datetime.utcnow()
+    )
+    db.add(sys_setting)
+
+    # 3. Crear usuario Dueño (OWNER) asignado exclusivamente a su propio negocio
     user = UserModel(
         email=email,
         hashed_password=get_password_hash(payload.password),
         full_name=payload.full_name,
         phone=payload.phone,
         role="OWNER",
-        business_id=biz.id,
+        business_id=new_biz.id,
         approval_status="APPROVED",
         is_active=True
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    await db.refresh(new_biz)
 
     jwt_token, session, pref = await _create_user_session_and_get_prefs(user, request, db)
 
@@ -1111,39 +1160,55 @@ async def register_user(payload: RegisterUserRequest, request: Request, db: Asyn
 
 
 @api_router.post("/onboarding/complete")
-async def complete_onboarding(payload: OnboardingCompleteRequest, db: AsyncSession = Depends(get_db)):
+async def complete_onboarding(
+    payload: OnboardingCompleteRequest,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Guarda los datos del modal inicial de onboarding:
-    1. Datos personales y de la(s) compañía(s).
-    2. Parámetros del sistema y preferencias (moneda, tasa, IVA, auto-sync).
-    3. Activación del Plan (Plan Gratuito 30 días con Xion-Pay).
+    Guarda los datos del modal inicial de onboarding respetando el aislamiento multi-tenant:
+    1. Identifica al usuario y su negocio específico mediante user_id o token Bearer.
+    2. Actualiza los datos de la Compañía de ESTE usuario (no sobrescribe otros negocios).
+    3. Configura los parámetros cambiarios y fiscales para este tenant.
+    4. Activa el Plan (Trial de 30 días o seleccionado) para este tenant.
     """
-    # 1. Actualizar datos de usuario si se especificó
+    user = None
     if payload.user_id:
         user_res = await db.execute(select(UserModel).where(UserModel.id == payload.user_id))
         user = user_res.scalar_one_or_none()
-        if user:
-            if payload.full_name:
-                user.full_name = payload.full_name
-            if payload.phone:
-                user.phone = payload.phone
-            db.add(user)
+    if not user:
+        user = await get_optional_current_user(authorization, db)
 
-    # 2. Actualizar o crear Compañía Principal
-    biz_res = await db.execute(select(BusinessModel).limit(1))
-    biz = biz_res.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=400, detail="Usuario no especificado o no autenticado.")
+
+    # 1. Actualizar datos de usuario si se especificó
+    if payload.full_name:
+        user.full_name = payload.full_name
+    if payload.phone:
+        user.phone = payload.phone
+    db.add(user)
+
+    # 2. Actualizar o crear Compañía Principal vinculada exclusivamente a este usuario
+    biz = None
+    if user.business_id:
+        biz_res = await db.execute(select(BusinessModel).where(BusinessModel.id == user.business_id))
+        biz = biz_res.scalar_one_or_none()
+
     p_comp = payload.primary_company
     if not biz:
+        new_biz_id = f"biz-{uuid.uuid4().hex[:12]}"
         biz = BusinessModel(
-            id="biz-101",
+            id=new_biz_id,
             legal_name=p_comp.legal_name,
             trade_name=p_comp.trade_name,
             tax_id=p_comp.tax_id,
-            phone=p_comp.phone or "+58 414-1112233",
-            email=p_comp.email or "contacto@empresa.com",
+            phone=p_comp.phone or user.phone or "+58 414-0000000",
+            email=p_comp.email or user.email,
             is_active=True
         )
         db.add(biz)
+        user.business_id = biz.id
     else:
         biz.legal_name = p_comp.legal_name
         biz.trade_name = p_comp.trade_name
@@ -1157,8 +1222,8 @@ async def complete_onboarding(payload: OnboardingCompleteRequest, db: AsyncSessi
     await db.commit()
     await db.refresh(biz)
 
-    # 3. Guardar configuraciones del sistema (moneda, tasa, IVA, sync)
-    sys_res = await db.execute(select(SystemSettingsModel).limit(1))
+    # 3. Guardar configuraciones del sistema del tenant específico
+    sys_res = await db.execute(select(SystemSettingsModel).where(SystemSettingsModel.business_id == biz.id))
     sys_setting = sys_res.scalar_one_or_none()
     if not sys_setting:
         sys_setting = SystemSettingsModel(
@@ -1372,6 +1437,7 @@ async def get_user_profile(
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
+            "onboarding_completed": not is_new_user,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
         },
@@ -1597,9 +1663,15 @@ def recalculate_branch_cash_registers():
         b["active_cash_registers_count"] = len([r for r in cash_registers_db if r["branch_id"] == b["id"] and r.get("is_active", True)])
 
 @api_router.get("/branches")
-async def list_branches():
+async def list_branches(
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
     recalculate_branch_cash_registers()
+    current_user = await get_optional_current_user(authorization, db)
+    if current_user and current_user.business_id:
+        return [b for b in branches_db if b.get("business_id") == current_user.business_id]
     return branches_db
 
 @api_router.get("/branches/{branch_id}")
@@ -1611,10 +1683,17 @@ async def get_branch(branch_id: str):
     return {"message": "Sucursal no encontrada"}
 
 @api_router.post("/branches", response_model=BranchResponse, status_code=status.HTTP_201_CREATED)
-async def create_branch(payload: BranchCreate):
+async def create_branch(
+    payload: BranchCreate,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    current_user = await get_optional_current_user(authorization, db)
+    biz_id = current_user.business_id if current_user else "biz-101"
+
     max_branches = xion_pay_state.get("limits", {}).get("max_branches", 2)
-    active_branches = [b for b in branches_db if b.get("is_active", True)]
+    active_branches = [b for b in branches_db if b.get("business_id") == biz_id and b.get("is_active", True)]
     if len(active_branches) >= max_branches:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1623,7 +1702,7 @@ async def create_branch(payload: BranchCreate):
 
     new_b = {
         "id": f"branch-{int(datetime.utcnow().timestamp())}",
-        "business_id": "biz-101",
+        "business_id": biz_id,
         "name": payload.name,
         "address": payload.address,
         "latitude": payload.latitude or 10.6417,
@@ -1656,17 +1735,33 @@ async def delete_branch(branch_id: str):
     return {"message": "Sucursal eliminada"}
 
 @api_router.get("/cash-registers")
-async def list_cash_registers(branch_id: Optional[str] = None):
+async def list_cash_registers(
+    branch_id: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    current_user = await get_optional_current_user(authorization, db)
+    biz_id = current_user.business_id if current_user else None
+    registers = cash_registers_db
+    if biz_id:
+        registers = [r for r in registers if r.get("business_id") == biz_id]
     if branch_id:
-        return [r for r in cash_registers_db if r["branch_id"] == branch_id]
-    return cash_registers_db
+        return [r for r in registers if r["branch_id"] == branch_id]
+    return registers
 
 @api_router.post("/cash-registers", status_code=status.HTTP_201_CREATED)
-async def create_cash_register(payload: CashRegisterCreate):
+async def create_cash_register(
+    payload: CashRegisterCreate,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    current_user = await get_optional_current_user(authorization, db)
+    biz_id = current_user.business_id if current_user else "biz-101"
+
     max_pos = xion_pay_state.get("limits", {}).get("max_pos_registers", 4)
-    active_count = len([r for r in cash_registers_db if r.get("is_active", True)])
+    active_count = len([r for r in cash_registers_db if r.get("business_id") == biz_id and r.get("is_active", True)])
     if active_count >= max_pos:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1681,6 +1776,7 @@ async def create_cash_register(payload: CashRegisterCreate):
 
     new_r = {
         "id": f"reg-{int(datetime.utcnow().timestamp())}",
+        "business_id": biz_id,
         "branch_id": payload.branch_id,
         "branch_name": branch_name,
         "name": payload.name,
@@ -1694,6 +1790,8 @@ async def create_cash_register(payload: CashRegisterCreate):
         "created_at": datetime.utcnow()
     }
     cash_registers_db.append(new_r)
+    recalculate_branch_cash_registers()
+    return new_r
     recalculate_branch_cash_registers()
     return new_r
 
@@ -2103,9 +2201,20 @@ async def pay_purchase_debt(purchase_id: str, payload: PurchasePayDTO):
 
 # 5. Users & Approvals
 @api_router.get("/users")
-async def list_users(db: AsyncSession = Depends(get_db)):
+async def list_users(
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
-    result = await db.execute(select(UserModel).order_by(UserModel.created_at.desc()))
+    current_user = await get_optional_current_user(authorization, db)
+    if current_user and current_user.business_id:
+        result = await db.execute(
+            select(UserModel)
+            .where(UserModel.business_id == current_user.business_id)
+            .order_by(UserModel.created_at.desc())
+        )
+    else:
+        result = await db.execute(select(UserModel).order_by(UserModel.created_at.desc()))
     users = result.scalars().all()
     out = []
     for u in users:
@@ -2121,6 +2230,7 @@ async def list_users(db: AsyncSession = Depends(get_db)):
             "full_name": u.full_name,
             "phone": u.phone or "",
             "role": u.role,
+            "business_id": u.business_id,
             "branch_id": u.branch_id,
             "branch_name": branch_name,
             "approval_status": u.approval_status,
@@ -2349,6 +2459,7 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db:
     if existing and existing.get("status") == "APPROVED":
         assigned_role = existing.get("role", role)
         assigned_branch = existing.get("branch_id", branch_id)
+        assigned_biz_id = existing.get("business_id")
         uid = payload.get("user_id") or existing.get("user_id")
         email = payload.get("email") or existing.get("email")
         if uid or email:
@@ -2362,6 +2473,8 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db:
                 user_res = await db.execute(select(UserModel).where(or_(*cond)))
                 user = user_res.scalar_one_or_none()
                 if user:
+                    if assigned_biz_id:
+                        user.business_id = assigned_biz_id
                     user.branch_id = assigned_branch
                     user.role = assigned_role
                     user.approval_status = "APPROVED"
@@ -2389,6 +2502,7 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db:
             "role": role,
             "branch_id": branch_id,
             "branch_name": branch_name,
+            "business_id": payload.get("business_id"),
             "status": "PENDING",
             "created_at": datetime.utcnow().isoformat(),
             "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
@@ -2425,12 +2539,19 @@ async def list_pending_staff_requests():
     return valid_requests
 
 @api_router.post("/staff/approve-request")
-async def approve_staff_request(payload: dict = Body(...), db: AsyncSession = Depends(get_db)):
+async def approve_staff_request(
+    payload: dict = Body(...),
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     """
     El Dueño aprueba una solicitud de vinculación de personal asignando el rol y sucursal correspondientes.
-    Actualiza la base de datos de usuarios si existe registro.
+    Vincula el colaborador exclusivamente al negocio (Tenant) del dueño actual.
     """
     verify_system_operational()
+    current_user = await get_optional_current_user(authorization, db)
+    owner_biz_id = current_user.business_id if current_user else None
+
     code = (payload.get("pairing_code") or "").strip().upper().replace("XM-", "").replace("XM", "")
 
     branch_id = payload.get("branch_id")
@@ -2451,6 +2572,8 @@ async def approve_staff_request(payload: dict = Body(...), db: AsyncSession = De
             s["branch_id"] = branch_id
             s["branch_name"] = branch_name
             s["role"] = role
+            if owner_biz_id:
+                s["business_id"] = owner_biz_id
             target_req = s
             break
 
@@ -2459,6 +2582,7 @@ async def approve_staff_request(payload: dict = Body(...), db: AsyncSession = De
         target_req = {
             "pairing_code": code,
             "status": "APPROVED",
+            "business_id": owner_biz_id,
             "branch_id": branch_id,
             "branch_name": branch_name,
             "role": role,
@@ -2469,7 +2593,7 @@ async def approve_staff_request(payload: dict = Body(...), db: AsyncSession = De
         }
         staff_pairings_db.append(target_req)
 
-    # Actualizar estado del usuario en la base de datos si existe
+    # Actualizar estado del usuario en la base de datos si existe y vincularlo al tenant del dueño
     uid = target_req.get("user_id")
     email = target_req.get("email")
     if uid or email:
@@ -2483,6 +2607,8 @@ async def approve_staff_request(payload: dict = Body(...), db: AsyncSession = De
             user_res = await db.execute(select(UserModel).where(or_(*cond)))
             user = user_res.scalar_one_or_none()
             if user:
+                if owner_biz_id:
+                    user.business_id = owner_biz_id
                 user.branch_id = branch_id
                 user.role = role
                 user.approval_status = "APPROVED"
@@ -2545,18 +2671,26 @@ async def get_notifications():
 
 # 9. Billing & Xion-Pay
 @api_router.get("/billing/account-status", response_model=AccountStatusResponse)
-async def get_account_status(db: AsyncSession = Depends(get_db)):
+async def get_account_status(
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     plan_name = xion_pay_state.get("plan_name", "Plan Comercio")
     billing_cycle = (xion_pay_state.get("billing_cycle") or "MONTHLY").upper()
     expires_at = xion_pay_state.get("expires_at") or (datetime.utcnow() + timedelta(days=30))
     days_remaining = max(0, (expires_at - datetime.utcnow()).days) if expires_at else 30
     sub_status = xion_pay_state.get("license_status", "active")
 
-    # Sincronizar en tiempo real con Xion-Pay
+    # Sincronizar en tiempo real con Xion-Pay para el tenant específico
     biz = None
     try:
-        biz_res = await db.execute(select(BusinessModel).limit(1))
-        biz = biz_res.scalar_one_or_none()
+        current_user = await get_optional_current_user(authorization, db)
+        if current_user and current_user.business_id:
+            biz_res = await db.execute(select(BusinessModel).where(BusinessModel.id == current_user.business_id))
+            biz = biz_res.scalar_one_or_none()
+        if not biz:
+            biz_res = await db.execute(select(BusinessModel).limit(1))
+            biz = biz_res.scalar_one_or_none()
         biz_identifier = biz.tax_id if (biz and biz.tax_id) else None
 
         live = await XionPayService.get_license_status(biz_identifier)
