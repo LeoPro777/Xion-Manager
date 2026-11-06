@@ -28,7 +28,8 @@ import {
   Sun,
   Moon,
   Receipt,
-  Sparkles
+  Sparkles,
+  AlertTriangle
 } from 'lucide-react';
 import { api, applySystemPreferences } from '../services/api';
 import { NotificationItem, Role, User } from '../types';
@@ -52,6 +53,7 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
 }) => {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [exchangeRate, setExchangeRate] = useState<number>(37.50);
+  const [isSuspended, setIsSuspended] = useState<boolean>(false);
   const [showNotifDrawer, setShowNotifDrawer] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
@@ -99,6 +101,9 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
   useEffect(() => {
     api.getNotifications().then(setNotifications);
     api.getExchangeRate().then((cfg) => setExchangeRate(cfg.current_exchange_rate_bs));
+    api.getAccountStatus().then((st) => {
+      setIsSuspended(st?.traffic_light?.status === 'SUSPENDED');
+    }).catch(() => {});
 
     const handleSettingsUpdated = (e: Event) => {
       const customEvent = e as CustomEvent;
@@ -108,7 +113,7 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
     };
     window.addEventListener('xion:settings-updated', handleSettingsUpdated);
     return () => window.removeEventListener('xion:settings-updated', handleSettingsUpdated);
-  }, []);
+  }, [activeTab]);
 
   const navItems = [
     { id: 'dashboard', label: 'Panel Principal', icon: LayoutDashboard },
@@ -452,6 +457,25 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
 
         {/* Content Body */}
         <main className="flex-1 overflow-y-auto px-3 py-3.5 sm:p-6 pb-24 md:pb-6 bg-slate-950/80">
+          {isSuspended && (
+            <div className="mb-4 p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-rose-300 animate-in fade-in duration-200">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-rose-500/20 flex items-center justify-center text-rose-400 shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-rose-200">Servicio suspendido. Contacte al administrador para renovar su plan.</p>
+                  <p className="text-[11px] text-rose-400/80">El acceso a cajas POS y módulos operativos se encuentra restringido temporalmente.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveTab('billing')}
+                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs transition-colors shrink-0"
+              >
+                Renovar en Xion-Pay
+              </button>
+            </div>
+          )}
           {children}
         </main>
 

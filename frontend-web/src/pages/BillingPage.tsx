@@ -60,8 +60,16 @@ export const BillingPage: React.FC<BillingPageProps> = ({ onNavigateToPaymentRep
           <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Salud de tu Cuenta</span>
-              <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5" />
+              <span className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 ${
+                status.traffic_light.status === 'SUSPENDED' || status.traffic_light.color === 'RED'
+                  ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                  : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+              }`}>
+                {status.traffic_light.status === 'SUSPENDED' || status.traffic_light.color === 'RED' ? (
+                  <AlertCircle className="w-3.5 h-3.5" />
+                ) : (
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                )}
                 {status.traffic_light.label}
               </span>
             </div>

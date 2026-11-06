@@ -34,6 +34,11 @@ app.add_exception_handler(AppException, app_exception_handler)
 # API Routers
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
+# Aliases directos para Webhooks de Xion-Pay
+from app.api.v1.api_router import receive_xion_pay_webhook
+app.add_api_route("/xionpay-webhook", receive_xion_pay_webhook, methods=["POST"], include_in_schema=False)
+app.add_api_route("/webhooks/xion-pay", receive_xion_pay_webhook, methods=["POST"], include_in_schema=False)
+
 
 # WebSocket Realtime Live Sync Endpoint
 @app.websocket("/ws/live-sync")

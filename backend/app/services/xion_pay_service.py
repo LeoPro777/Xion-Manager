@@ -122,7 +122,12 @@ class XionPayService:
             return {"status": "error", "message": str(e)}
 
     @classmethod
-    def verify_webhook_signature(cls, raw_body: bytes, signature_header: Optional[str]) -> bool:
+    def verify_webhook_signature(
+        cls,
+        raw_body: bytes,
+        signature_header: Optional[str],
+        secret: Optional[str] = None
+    ) -> bool:
         """
         Verifica criptográficamente la firma HMAC-SHA256 (X-Xion-Signature) enviada por Xion-Pay.
         Previene ataques de temporización utilizando hmac.compare_digest.
@@ -130,11 +135,11 @@ class XionPayService:
         if not signature_header:
             return False
 
-        secret = settings.XION_PAY_WEBHOOK_SECRET.encode("utf-8")
-        computed_hex = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
+        webhook_secret = (secret or settings.XION_PAY_WEBHOOK_SECRET).encode("utf-8")
+        expected_sig = "sha256=" + hmac.new(webhook_secret, raw_body, hashlib.sha256).hexdigest()
 
         clean_sig = signature_header.strip()
-        if clean_sig.startswith("sha256="):
-            clean_sig = clean_sig[7:]
+        if not clean_sig.startswith("sha256="):
+            clean_sig = f"sha256={clean_sig}"
 
-        return hmac.compare_digest(computed_hex.lower(), clean_sig.lower())
+        return hmac.compare_digest(expected_sig.lower(), clean_sig.lower())

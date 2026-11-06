@@ -30,7 +30,7 @@ from app.services.image_service import (
 )
 from app.services.storage_service import storage_service
 from app.services.xion_pay_service import XionPayService
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.entities import (
@@ -38,7 +38,8 @@ from app.models.entities import (
     Business as BusinessModel,
     SystemSettings as SystemSettingsModel,
     UserSession as UserSessionModel,
-    UserPreference as UserPreferenceModel
+    UserPreference as UserPreferenceModel,
+    BusinessSubscription
 )
 from app.core.security import create_access_token, decode_access_token, verify_google_id_token, get_password_hash, verify_password
 
@@ -71,8 +72,37 @@ xion_pay_state = {
     "license_status": "trial",
     "trial_ends_at": None,
     "tolerance_expires_at": None,
-    "tenant_id": settings.XION_PAY_TENANT_ID
+    "tenant_id": settings.XION_PAY_TENANT_ID,
+    "status": "active",
+    "is_active": True,
+    "expires_at": None,
+    "limits": {
+        "max_branches": 2,
+        "max_pos_registers": 4,
+        "features": {
+            "inventory_transfers": True,
+            "advanced_audit": False
+        }
+    },
+    "plan_code": "advanced",
+    "plan_name": "Plan Comercial Avanzado",
+    "billing_cycle": "monthly",
+    "suspension_reason": None
 }
+
+def is_system_operational() -> bool:
+    """Verifica si el comercio se encuentra activo y no suspendido."""
+    if not xion_pay_state.get("is_active", True) or xion_pay_state.get("status") == "suspended" or xion_pay_state.get("license_status") == "suspended":
+        return False
+    return True
+
+def verify_system_operational():
+    """Restringe de inmediato el acceso a cajas POS y módulos operativos si el servicio está suspendido."""
+    if not is_system_operational():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Servicio suspendido. Contacte al administrador para renovar su plan"
+        )
 
 xion_pay_plans_db: List[dict] = [
     {
@@ -372,13 +402,15 @@ async def sync_xion_pay_data(payload: XionPaySyncPayload):
     }
 
 @api_router.post("/xionpay-webhook", response_model=XionPayWebhookResponse)
+@api_router.post("/webhooks/xion-pay", response_model=XionPayWebhookResponse)
 async def receive_xion_pay_webhook(
     request: Request,
-    x_xion_signature: Optional[str] = Header(None, alias="X-Xion-Signature")
+    x_xion_signature: Optional[str] = Header(None, alias="X-Xion-Signature"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Recepción de Webhooks firmados con HMAC-SHA256 (X-Xion-Signature) desde Xion-Pay:
-    Maneja payment.approved, payment.rejected y license.renewed.
+    Maneja account.suspended, subscription.renewed, payment.approved, payment.rejected y license.renewed.
     """
     raw_body = await request.body()
     
@@ -386,22 +418,145 @@ async def receive_xion_pay_webhook(
     if not XionPayService.verify_webhook_signature(raw_body, x_xion_signature):
         if settings.ENVIRONMENT != "development" or x_xion_signature is not None:
             raise HTTPException(
-                status_code=401,
+                status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Firma criptográfica inválida o ausente en cabecera X-Xion-Signature"
             )
 
     try:
         payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
-        raise HTTPException(status_code=400, detail="Cuerpo de la petición no es JSON válido")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cuerpo de la petición no es JSON válido")
 
     event = payload.get("event", "unknown")
     data = payload.get("data") or payload
     payment_id = payload.get("payment_id") or data.get("payment_id")
     license_token = payload.get("license_token") or data.get("license_token")
     rejection_reason = payload.get("rejection_reason") or data.get("rejection_reason")
+    tax_id = data.get("tax_id")
 
-    if event in ("payment.approved", "payment_approved"):
+    if event in ("account.suspended", "account_suspended"):
+        reason = data.get("reason", "Vencimiento de suscripción por saldo insuficiente")
+
+        # 1. Actualizar comercio localmente en memoria
+        xion_pay_state["is_active"] = False
+        xion_pay_state["status"] = "suspended"
+        xion_pay_state["license_status"] = "suspended"
+        xion_pay_state["license_token"] = None
+        xion_pay_state["suspension_reason"] = reason
+
+        # 2. Actualizar comercio localmente en base de datos
+        biz = None
+        if tax_id:
+            biz_res = await db.execute(select(BusinessModel).where(BusinessModel.tax_id == tax_id))
+            biz = biz_res.scalar_one_or_none()
+        if not biz:
+            biz_res = await db.execute(select(BusinessModel).limit(1))
+            biz = biz_res.scalar_one_or_none()
+
+        if biz:
+            biz.is_active = False
+            biz.status = "suspended"
+            biz.license_token = None
+            biz.suspension_reason = reason
+            biz.updated_at = datetime.utcnow()
+
+            # Invalidar y revocar sesiones activas
+            await db.execute(
+                update(UserSessionModel)
+                .where(UserSessionModel.business_id == biz.id, UserSessionModel.is_active == True)
+                .values(is_active=False)
+            )
+
+            # Actualizar suscripción
+            sub_res = await db.execute(select(BusinessSubscription).where(BusinessSubscription.business_id == biz.id))
+            sub = sub_res.scalar_one_or_none()
+            if sub:
+                sub.status = "SUSPENDED"
+                sub.updated_at = datetime.utcnow()
+
+            await db.commit()
+
+        return {
+            "status": "received",
+            "event": event,
+            "processed": True,
+            "message": "Comercio suspendido, licencia revocada y módulos operativos restringidos con éxito."
+        }
+
+    elif event in ("subscription.renewed", "subscription_renewed", "license.renewed", "license_renewed"):
+        token = data.get("license_token") or license_token
+        expires_at_str = data.get("expires_at")
+        billing_cycle = data.get("billing_cycle", "monthly")
+        plan_code = data.get("plan_code", "advanced")
+        plan_name = data.get("plan_name", "Plan Comercial Avanzado")
+        limits = data.get("limits") or {
+            "max_branches": 2,
+            "max_pos_registers": 4,
+            "features": {
+                "inventory_transfers": True,
+                "advanced_audit": False
+            }
+        }
+
+        parsed_expires_at = None
+        if expires_at_str:
+            try:
+                clean_exp = expires_at_str.replace("Z", "+00:00")
+                parsed_expires_at = datetime.fromisoformat(clean_exp).replace(tzinfo=None)
+            except Exception:
+                parsed_expires_at = datetime.utcnow() + timedelta(days=30)
+        else:
+            parsed_expires_at = datetime.utcnow() + timedelta(days=30)
+
+        # 1. Guardar token RS256, actualizar fecha de vencimiento y límites en memoria
+        xion_pay_state["is_active"] = True
+        xion_pay_state["status"] = "active"
+        xion_pay_state["license_status"] = "active"
+        xion_pay_state["license_token"] = token
+        xion_pay_state["expires_at"] = parsed_expires_at
+        xion_pay_state["billing_cycle"] = billing_cycle
+        xion_pay_state["plan_code"] = plan_code
+        xion_pay_state["plan_name"] = plan_name
+        xion_pay_state["limits"] = limits
+        xion_pay_state["suspension_reason"] = None
+
+        # 2. Guardar token RS256 y configuración en base de datos
+        biz = None
+        if tax_id:
+            biz_res = await db.execute(select(BusinessModel).where(BusinessModel.tax_id == tax_id))
+            biz = biz_res.scalar_one_or_none()
+        if not biz:
+            biz_res = await db.execute(select(BusinessModel).limit(1))
+            biz = biz_res.scalar_one_or_none()
+
+        if biz:
+            biz.is_active = True
+            biz.status = "active"
+            biz.license_token = token
+            biz.expires_at = parsed_expires_at
+            biz.limits = limits
+            biz.suspension_reason = None
+            biz.updated_at = datetime.utcnow()
+
+            # Actualizar suscripción
+            sub_res = await db.execute(select(BusinessSubscription).where(BusinessSubscription.business_id == biz.id))
+            sub = sub_res.scalar_one_or_none()
+            if sub:
+                sub.status = "ACTIVE"
+                sub.expires_at = parsed_expires_at
+                sub.billing_cycle = billing_cycle.upper()
+                sub.updated_at = datetime.utcnow()
+
+            await db.commit()
+
+        return {
+            "status": "received",
+            "event": event,
+            "processed": True,
+            "message": "Suscripción renovada, token guardado, límites actualizados y terminales desbloqueados con éxito."
+        }
+
+    elif event in ("payment.approved", "payment_approved"):
         for r in payment_reports_db:
             if (payment_id and r.get("xion_pay_payment_id") == str(payment_id)) or \
                (data.get("reference_number") and r.get("reference_number") == data.get("reference_number")):
@@ -412,6 +567,8 @@ async def receive_xion_pay_webhook(
         if license_token:
             xion_pay_state["license_token"] = license_token
             xion_pay_state["license_status"] = "active"
+            xion_pay_state["status"] = "active"
+            xion_pay_state["is_active"] = True
 
     elif event in ("payment.rejected", "payment_rejected"):
         for r in payment_reports_db:
@@ -422,11 +579,6 @@ async def receive_xion_pay_webhook(
                 r["verified_by"] = "Xion-Pay Webhook (Automated)"
                 r["verified_at"] = datetime.utcnow()
                 break
-
-    elif event in ("license.renewed", "license_renewed"):
-        if license_token:
-            xion_pay_state["license_token"] = license_token
-            xion_pay_state["license_status"] = "active"
 
     return {
         "status": "received",
@@ -1380,6 +1532,15 @@ async def get_branch(branch_id: str):
 
 @api_router.post("/branches", response_model=BranchResponse, status_code=status.HTTP_201_CREATED)
 async def create_branch(payload: BranchCreate):
+    verify_system_operational()
+    max_branches = xion_pay_state.get("limits", {}).get("max_branches", 2)
+    active_branches = [b for b in branches_db if b.get("is_active", True)]
+    if len(active_branches) >= max_branches:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Límite de sucursales alcanzado ({len(active_branches)}/{max_branches}). Actualice su plan en Xion-Pay para añadir más."
+        )
+
     new_b = {
         "id": f"branch-{int(datetime.utcnow().timestamp())}",
         "business_id": "biz-101",
@@ -1399,6 +1560,7 @@ async def create_branch(payload: BranchCreate):
 
 @api_router.put("/branches/{branch_id}")
 async def update_branch(branch_id: str, payload: BranchUpdate):
+    verify_system_operational()
     for i, b in enumerate(branches_db):
         if b["id"] == branch_id:
             branches_db[i].update(payload.model_dump(exclude_unset=True))
@@ -1407,6 +1569,7 @@ async def update_branch(branch_id: str, payload: BranchUpdate):
 
 @api_router.delete("/branches/{branch_id}")
 async def delete_branch(branch_id: str):
+    verify_system_operational()
     global branches_db, cash_registers_db
     branches_db = [b for b in branches_db if b["id"] != branch_id]
     cash_registers_db = [r for r in cash_registers_db if r["branch_id"] != branch_id]
@@ -1420,10 +1583,14 @@ async def list_cash_registers(branch_id: Optional[str] = None):
 
 @api_router.post("/cash-registers", status_code=status.HTTP_201_CREATED)
 async def create_cash_register(payload: CashRegisterCreate):
-    # Validar límite de cajas contratadas (Xion-Pay plan guard: max 6)
+    verify_system_operational()
+    max_pos = xion_pay_state.get("limits", {}).get("max_pos_registers", 4)
     active_count = len([r for r in cash_registers_db if r.get("is_active", True)])
-    if active_count >= 6:
-        return {"error": "UPGRADE_REQUIRED", "message": "Límite de cajas alcanzado (6/6). Adquiere un add-on en Xion-Pay para continuar."}
+    if active_count >= max_pos:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Límite de cajas registradoras alcanzado ({active_count}/{max_pos}). Adquiere un add-on o actualiza tu plan en Xion-Pay para continuar."
+        )
 
     branch_name = "Sucursal Asignada"
     for b in branches_db:
@@ -1473,6 +1640,7 @@ async def delete_cash_register(register_id: str):
 
 @api_router.post("/cash-registers/{register_id}/toggle-status")
 async def toggle_cash_register_status(register_id: str, operator_name: Optional[str] = Body("Carlos Mendoza", embed=True)):
+    verify_system_operational()
     for r in cash_registers_db:
         if r["id"] == register_id:
             if r["status"] == "OPEN":
@@ -1526,6 +1694,7 @@ async def list_shrinkage():
 
 @api_router.post("/inventory/adjust-stock")
 async def adjust_stock(payload: StockAdjustmentDTO):
+    verify_system_operational()
     for p in inventory_db:
         if p["id"] == payload.product_id or p.get("product_id") == payload.product_id:
             old_qty = p["current_stock"]
@@ -1611,6 +1780,7 @@ async def delete_product(product_id: str):
 
 @api_router.post("/inventory/shrinkage")
 async def register_shrinkage(payload: ShrinkageCreate):
+    verify_system_operational()
     for p in inventory_db:
         if p["id"] == payload.product_id or p.get("product_id") == payload.product_id:
             p["current_stock"] = max(0.0, p["current_stock"] - payload.quantity)
@@ -1634,6 +1804,13 @@ async def list_transfers():
 
 @api_router.post("/inventory/transfers", status_code=status.HTTP_201_CREATED)
 async def create_transfer(payload: StockTransferCreate):
+    verify_system_operational()
+    limits_features = xion_pay_state.get("limits", {}).get("features", {})
+    if limits_features.get("inventory_transfers") is False:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="El módulo de transferencias entre sucursales no está habilitado en su plan actual."
+        )
     prod_name = "Producto"
     for p in inventory_db:
         if p["id"] == payload.product_id or p.get("product_id") == payload.product_id:
@@ -1722,6 +1899,7 @@ async def get_purchase_detail(purchase_id: str):
 
 @api_router.post("/purchases", status_code=status.HTTP_201_CREATED)
 async def create_purchase(payload: PurchaseCreate):
+    verify_system_operational()
     rate = payload.exchange_rate or global_settings.get("current_exchange_rate_bs", 37.5)
     total_usd = payload.total_amount_usd
     total_bs = payload.total_amount_bs or (total_usd * rate)
@@ -2085,41 +2263,67 @@ async def get_notifications():
 
 # 9. Billing & Xion-Pay
 @api_router.get("/billing/account-status", response_model=AccountStatusResponse)
-async def get_account_status():
-    plan_name = "Plan Comercio"
-    billing_cycle = "MONTHLY"
-    expires_at = datetime(2026, 11, 17, 23, 59, 59)
-    days_remaining = 30
-    sub_status = "active"
+async def get_account_status(db: AsyncSession = Depends(get_db)):
+    plan_name = xion_pay_state.get("plan_name", "Plan Comercio")
+    billing_cycle = (xion_pay_state.get("billing_cycle") or "MONTHLY").upper()
+    expires_at = xion_pay_state.get("expires_at") or (datetime.utcnow() + timedelta(days=30))
+    days_remaining = max(0, (expires_at - datetime.utcnow()).days) if expires_at else 30
+    sub_status = xion_pay_state.get("license_status", "active")
 
+    # Sincronizar con base de datos local
     try:
-        live = await XionPayService.get_license_status()
-        if live and live.get("status"):
-            sub_status = live.get("status", "active")
-            sub_info = live.get("subscription") or {}
-            if sub_info.get("plan_name"):
-                plan_name = sub_info.get("plan_name")
-            elif live.get("commercial_name"):
-                plan_name = f"Plan {live.get('commercial_name')}"
-                
-            end_date_str = sub_info.get("current_period_end") or live.get("trial_ends_at")
-            if end_date_str:
-                clean_date = end_date_str.replace("Z", "+00:00")
-                parsed_date = datetime.fromisoformat(clean_date)
-                expires_at = parsed_date.replace(tzinfo=None)
-                now_utc = datetime.utcnow()
-                days_remaining = max(0, (expires_at - now_utc).days)
+        biz_res = await db.execute(select(BusinessModel).limit(1))
+        biz = biz_res.scalar_one_or_none()
+        if biz:
+            if not biz.is_active or biz.status == "suspended":
+                sub_status = "suspended"
+                days_remaining = 0
+            elif biz.expires_at:
+                expires_at = biz.expires_at
+                days_remaining = max(0, (expires_at - datetime.utcnow()).days)
+            if biz.limits:
+                xion_pay_state["limits"] = biz.limits
     except Exception:
         pass
 
+    if sub_status != "suspended" and is_system_operational():
+        try:
+            live = await XionPayService.get_license_status()
+            if live and live.get("status"):
+                live_status = live.get("status", "active")
+                if live_status == "suspended":
+                    sub_status = "suspended"
+                sub_info = live.get("subscription") or {}
+                if sub_info.get("plan_name"):
+                    plan_name = sub_info.get("plan_name")
+                elif not xion_pay_state.get("plan_name") and live.get("commercial_name"):
+                    plan_name = f"Plan {live.get('commercial_name')}"
+                    
+                end_date_str = sub_info.get("current_period_end") or live.get("trial_ends_at")
+                if end_date_str and not xion_pay_state.get("expires_at"):
+                    clean_date = end_date_str.replace("Z", "+00:00")
+                    parsed_date = datetime.fromisoformat(clean_date)
+                    expires_at = parsed_date.replace(tzinfo=None)
+                    now_utc = datetime.utcnow()
+                    days_remaining = max(0, (expires_at - now_utc).days)
+        except Exception:
+            pass
+
+    is_suspended = (sub_status == "suspended") or (not is_system_operational())
+    limits = xion_pay_state.get("limits") or {"max_branches": 2, "max_pos_registers": 4}
+    max_branches = limits.get("max_branches", 2)
+    max_pos = limits.get("max_pos_registers", 4)
+    used_branches = len([b for b in branches_db if b.get("is_active", True)])
+    used_registers = len([r for r in cash_registers_db if r.get("is_active", True)])
+
     traffic_light = {
-        "status": "ACTIVE" if sub_status in ("active", "trial") else "SUSPENDED",
-        "color": "GREEN" if sub_status in ("active", "trial") else "RED",
-        "label": "Prueba Gratuita (30 días)" if sub_status == "trial" else ("Al día" if sub_status == "active" else "Suspendido"),
-        "description": f"Suscripción en Xion-Pay. Vence en {days_remaining} días."
+        "status": "SUSPENDED" if is_suspended else ("ACTIVE" if sub_status in ("active", "trial") else "SUSPENDED"),
+        "color": "RED" if is_suspended else "GREEN",
+        "label": "Suspendido" if is_suspended else ("Prueba Gratuita (30 días)" if sub_status == "trial" else "Al día"),
+        "description": "Servicio suspendido. Contacte al administrador para renovar su plan" if is_suspended else f"Suscripción en Xion-Pay. Vence en {days_remaining} días."
     }
 
-    if xion_pay_state.get("tolerance_expires_at"):
+    if xion_pay_state.get("tolerance_expires_at") and not is_suspended:
         traffic_light["label"] = "Prórroga Activa"
         traffic_light["description"] = "Prórroga de contingencia operativa otorgada por Xion-Pay mientras se valida tu pago."
 
@@ -2130,8 +2334,16 @@ async def get_account_status():
         "days_remaining": days_remaining,
         "traffic_light": traffic_light,
         "resource_usage": {
-            "branches": {"used": 2, "limit": 3, "percentage": 66.6},
-            "cash_registers": {"used": 4, "limit": 6, "percentage": 66.6}
+            "branches": {
+                "used": used_branches,
+                "limit": max_branches,
+                "percentage": round((used_branches / max(1, max_branches)) * 100, 1)
+            },
+            "cash_registers": {
+                "used": used_registers,
+                "limit": max_pos,
+                "percentage": round((used_registers / max(1, max_pos)) * 100, 1)
+            }
         }
     }
 
@@ -2381,6 +2593,7 @@ async def report_payment(
 
 @api_router.post("/sync/pos-push", response_model=PosPushResponse)
 async def pos_push_sync(payload: PosPushPayload):
+    verify_system_operational()
     return {
         "status": "SYNC_SUCCESS",
         "synced_sales_count": len(payload.sales),
