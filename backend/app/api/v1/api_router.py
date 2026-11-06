@@ -4,6 +4,7 @@ from typing import Optional, List
 from collections import defaultdict
 import time
 import json
+import uuid
 from app.core.config import settings
 from app.schemas.schemas import (
     AccountStatusResponse, BranchCreate, BranchUpdate, BranchResponse,
@@ -938,9 +939,11 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
         db.add(sys_setting)
 
         user = UserModel(
+            id=f"usr-{uuid.uuid4().hex[:12]}",
             email=email,
             hashed_password=get_password_hash("oauth2-google-managed"),
             full_name=name,
+            avatar_url=google_data.get("picture"),
             role="OWNER",
             business_id=biz.id,
             approval_status="APPROVED",
@@ -950,6 +953,12 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
         await db.commit()
         await db.refresh(user)
         await db.refresh(biz)
+    else:
+        if google_data.get("picture") and not user.avatar_url:
+            user.avatar_url = google_data.get("picture")
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
 
     if not user.is_active:
         raise HTTPException(
@@ -1130,6 +1139,7 @@ async def register_user(payload: RegisterUserRequest, request: Request, db: Asyn
 
     # 3. Crear usuario Dueño (OWNER) asignado exclusivamente a su propio negocio
     user = UserModel(
+        id=f"usr-{uuid.uuid4().hex[:12]}",
         email=email,
         hashed_password=get_password_hash(payload.password),
         full_name=payload.full_name,
