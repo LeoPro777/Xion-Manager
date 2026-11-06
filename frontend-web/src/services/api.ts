@@ -643,7 +643,9 @@ export const api = {
   // 1. Dashboard
   async getDashboardMetrics(): Promise<DashboardMetrics> {
     try {
-      const res = await fetch('/api/v1/dashboard/metrics');
+      const res = await fetch('/api/v1/dashboard/metrics', {
+        headers: authHeaders()
+      });
       if (res.ok) {
         return await res.json();
       }

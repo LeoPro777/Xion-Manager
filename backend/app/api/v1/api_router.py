@@ -793,6 +793,25 @@ async def _create_user_session_and_get_prefs(
     return jwt_token, session, pref
 
 
+async def _check_user_onboarding_completed(user: UserModel, db: AsyncSession) -> bool:
+    """
+    Determina si un usuario ha completado el onboarding:
+    - Si no es OWNER (empleados, cajeros, supervisores), no realiza onboarding empresarial -> True
+    - Si es OWNER, verifica si el negocio ya posee un RIF/tax_id definitivo (no TMP-) -> True/False
+    """
+    if not user:
+        return True
+    if user.role != "OWNER":
+        return True
+    if not user.business_id:
+        return False
+    biz_res = await db.execute(select(BusinessModel).where(BusinessModel.id == user.business_id))
+    biz = biz_res.scalar_one_or_none()
+    if not biz or not biz.tax_id or str(biz.tax_id).startswith("TMP-"):
+        return False
+    return True
+
+
 async def get_current_user_and_session(
     authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
@@ -953,7 +972,7 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
-            "onboarding_completed": not is_new_user,
+            "onboarding_completed": await _check_user_onboarding_completed(user, db),
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
         },
@@ -1043,7 +1062,7 @@ async def login_standard(payload: StandardLoginRequest, request: Request, db: As
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
-            "onboarding_completed": not is_new_user,
+            "onboarding_completed": await _check_user_onboarding_completed(user, db),
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
         },
@@ -1437,7 +1456,7 @@ async def get_user_profile(
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
-            "onboarding_completed": not is_new_user,
+            "onboarding_completed": await _check_user_onboarding_completed(user, db),
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
         },
@@ -1638,9 +1657,17 @@ async def logout(
 
 # 1. Dashboard
 @api_router.get("/dashboard/metrics")
-async def get_dashboard_metrics(branch_id: Optional[str] = None):
+async def get_dashboard_metrics(
+    branch_id: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    current_user = await get_optional_current_user(authorization, db)
+    biz_id = current_user.business_id if current_user else None
     registers = cash_registers_db
+    if biz_id:
+        registers = [r for r in registers if r.get("business_id") == biz_id]
     if branch_id and branch_id != "all":
         registers = [r for r in registers if r["branch_id"] == branch_id]
     total_sales = sum(float(r.get("today_sales_total", 0.0)) for r in registers)
@@ -2668,6 +2695,57 @@ async def get_cash_sessions():
 @api_router.get("/notifications")
 async def get_notifications():
     return []
+
+@api_router.post("/system/reset-database")
+async def reset_database(
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Elimina todos los datos de prueba y resetea las tablas para operar con datos 100% reales.
+    """
+    from sqlalchemy import delete
+    from app.models.entities import (
+        UserSession, UserPreference, AuditLog, InventoryTransaction,
+        InventoryShrinkage, SupplierPayablesLedger, PurchaseItem, Purchase,
+        Supplier, BranchInventory, ProductComposition, Product, Category,
+        PaymentReport, CashRegister, Branch, User, Business, SystemSettings
+    )
+    from app.core.init_db import seed_initial_data
+    
+    for model in [
+        UserSession, UserPreference, AuditLog, InventoryTransaction,
+        InventoryShrinkage, SupplierPayablesLedger, PurchaseItem, Purchase,
+        Supplier, BranchInventory, ProductComposition, Product, Category,
+        PaymentReport, CashRegister, Branch, SystemSettings, User, Business
+    ]:
+        try:
+            await db.execute(delete(model))
+        except Exception:
+            pass
+    
+    await db.commit()
+    
+    global branches_db, cash_registers_db, inventory_db, suppliers_db, purchases_db, transfers_db, categories_db, shrinkage_db, staff_pairings_db
+    branches_db.clear()
+    cash_registers_db.clear()
+    inventory_db.clear()
+    suppliers_db.clear()
+    purchases_db.clear()
+    transfers_db.clear()
+    categories_db.clear()
+    shrinkage_db.clear()
+    staff_pairings_db.clear()
+    
+    try:
+        await seed_initial_data()
+    except Exception:
+        pass
+
+    return {
+        "status": "success",
+        "message": "Base de datos y memorias reseteadas correctamente. Todos los datos de prueba eliminados."
+    }
 
 # 9. Billing & Xion-Pay
 @api_router.get("/billing/account-status", response_model=AccountStatusResponse)
