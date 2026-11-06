@@ -14,10 +14,15 @@ import { PaymentMethodsPage } from './pages/PaymentMethodsPage';
 import { PaymentReportsPage } from './pages/PaymentReportsPage';
 import { PreferencesPage } from './pages/PreferencesPage';
 import { OnboardingWizardModal } from './components/OnboardingWizardModal';
+import { AppLoadingScreen } from './components/AppLoadingScreen';
+import { PendingPairingScreen } from './components/PendingPairingScreen';
 import { User } from './types';
 import { api, applySystemPreferences } from './services/api';
 
 export const App: React.FC = () => {
+  const [isPreloading, setIsPreloading] = useState<boolean>(false);
+  const [preloadPercent, setPreloadPercent] = useState<number>(0);
+  const [preloadStatus, setPreloadStatus] = useState<string>('Inicializando plataforma...');
   // 1. Restaurar sesión de forma síncrona desde localStorage para evitar parpadeos y redirección al Login
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
@@ -84,8 +89,50 @@ export const App: React.FC = () => {
     api.getPreferences().then(applySystemPreferences);
   }, []);
 
+  const handleLoginSuccess = async (user: User | null) => {
+    handleUpdateUser(user);
+    if (user) {
+      if (user.approval_status === 'PENDING' && !user.business_id) {
+        return;
+      }
+      setIsPreloading(true);
+      await api.preloadCoreModules((pct, msg) => {
+        setPreloadPercent(pct);
+        setPreloadStatus(msg);
+      });
+      setIsPreloading(false);
+    }
+  };
+
+  if (isPreloading) {
+    return (
+      <AppLoadingScreen 
+        progressPercent={preloadPercent}
+        statusLabel={preloadStatus}
+      />
+    );
+  }
+
   if (!currentUser) {
-    return <LoginPage onLoginSuccess={handleUpdateUser} />;
+    return <LoginPage onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  if (currentUser.approval_status === 'PENDING' && !currentUser.business_id) {
+    return (
+      <PendingPairingScreen
+        currentUser={currentUser}
+        onApproved={async (approvedUser) => {
+          handleUpdateUser(approvedUser);
+          setIsPreloading(true);
+          await api.preloadCoreModules((pct, msg) => {
+            setPreloadPercent(pct);
+            setPreloadStatus(msg);
+          });
+          setIsPreloading(false);
+        }}
+        onLogout={handleLogout}
+      />
+    );
   }
 
   const needsOnboarding = (

@@ -18,7 +18,7 @@ export interface SystemSettings {
 
 export interface User {
   id: string;
-  business_id: string;
+  business_id?: string;
   branch_id?: string;
   branch_name?: string;
   email: string;
@@ -30,7 +30,7 @@ export interface User {
   avatar_url?: string;
   last_login_at?: string;
   onboarding_completed?: boolean;
-  created_at: string;
+  created_at?: string;
 }
 
 export interface UserPreference {

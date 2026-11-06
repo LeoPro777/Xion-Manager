@@ -101,4 +101,14 @@ async def on_startup():
     except Exception:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            
+    # Garantizar que business_id admita NULL para colaboradores en espera
+    try:
+        from sqlalchemy import text
+        async with engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE users ALTER COLUMN business_id DROP NOT NULL;"))
+            await conn.execute(text("ALTER TABLE user_sessions ALTER COLUMN business_id DROP NOT NULL;"))
+            await conn.execute(text("ALTER TABLE user_preferences ALTER COLUMN business_id DROP NOT NULL;"))
+    except Exception:
+        pass
 

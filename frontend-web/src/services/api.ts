@@ -546,6 +546,15 @@ export const api = {
     return await res.json();
   },
 
+  async getCurrentUser(): Promise<User | null> {
+    try {
+      const data = await this.getUserProfile();
+      return data?.user || null;
+    } catch {
+      return null;
+    }
+  },
+
   isTokenExpired(token?: string | null): boolean {
     if (!token) return true;
     try {
@@ -1013,6 +1022,94 @@ export const api = {
       }
     } catch {}
     return { message: 'Solicitud descartada' };
+  },
+
+  async selectCollaboratorRole(userId?: string): Promise<{
+    status: string;
+    pairing_code: string;
+    expires_in_seconds: number;
+    qr_payload: string;
+    user: User;
+  }> {
+    try {
+      const res = await fetch('/api/v1/staff/select-collaborator-role', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ user_id: userId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.user) {
+          localStorage.setItem('xion_user', JSON.stringify(data.user));
+        }
+        return data;
+      }
+    } catch {}
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    return {
+      status: 'PENDING',
+      pairing_code: code,
+      expires_in_seconds: 900,
+      qr_payload: `xion://pair-staff?code=${code}`,
+      user: {
+        id: userId || 'usr-temp',
+        email: 'colaborador@xion.com',
+        full_name: 'Colaborador',
+        role: 'CASHIER',
+        business_id: undefined,
+        branch_id: undefined,
+        approval_status: 'PENDING',
+        is_active: true,
+        onboarding_completed: false
+      }
+    };
+  },
+
+  async preloadCoreModules(onProgress?: (percent: number, label: string) => void): Promise<{
+    metrics?: DashboardMetrics;
+    branches?: Branch[];
+    cashRegisters?: CashRegister[];
+    exchangeRate?: SystemSettings;
+    plans?: XionPayPlan[];
+    paymentMethods?: PaymentMethod[];
+  }> {
+    onProgress?.(15, 'Verificando credenciales y sesión...');
+    await new Promise(r => setTimeout(r, 80));
+
+    onProgress?.(35, 'Cargando perfil y roles RBAC...');
+    const userPromise = this.getCurrentUser().catch(() => null);
+
+    onProgress?.(60, 'Sincronizando tasa oficial y configuraciones...');
+    const ratePromise = this.getExchangeRate().catch(() => null);
+    const plansPromise = this.getXionPayPlans().catch(() => []);
+
+    onProgress?.(80, 'Precargando sucursales, cajas y catálogo...');
+    const branchesPromise = this.getBranches().catch(() => []);
+    const registersPromise = this.getCashRegisters().catch(() => []);
+    const metricsPromise = this.getDashboardMetrics().catch(() => null);
+    const pmPromise = this.getPaymentMethods().catch(() => []);
+
+    const [user, rate, plans, branches, registers, metrics, paymentMethods] = await Promise.all([
+      userPromise,
+      ratePromise,
+      plansPromise,
+      branchesPromise,
+      registersPromise,
+      metricsPromise,
+      pmPromise
+    ]);
+
+    onProgress?.(100, '¡Entorno listo! Accediendo a Xion Manager...');
+    await new Promise(r => setTimeout(r, 150));
+
+    return {
+      metrics: metrics || undefined,
+      branches: branches || [],
+      cashRegisters: registers || [],
+      exchangeRate: rate || undefined,
+      plans: plans || [],
+      paymentMethods: paymentMethods || []
+    };
   },
 
 

@@ -2376,6 +2376,96 @@ def check_pairing_rate_limit(client_ip: str, max_requests: int = 5, window_secon
     pairing_rate_limit_store[client_ip] = timestamps
 
 
+@api_router.post("/staff/select-collaborator-role")
+async def select_collaborator_role(
+    payload: dict = Body(...),
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Cuando un nuevo usuario selecciona 'Otro / Colaborador':
+    1. Lo aísla de cualquier negocio existente (business_id = None).
+    2. Si tenía un negocio provisional (TMP-), lo desvincula y limpia.
+    3. Establece su rol a CASHIER y approval_status a 'PENDING'.
+    4. Genera su código numérico de 6 dígitos único para vinculación.
+    5. Queda 'en el aire' esperando autorización y asignación de rol del Dueño.
+    """
+    verify_system_operational()
+    current_user = await get_optional_current_user(authorization, db)
+    user_id = payload.get("user_id")
+    if not current_user and user_id:
+        user_res = await db.execute(select(UserModel).where(UserModel.id == user_id))
+        current_user = user_res.scalar_one_or_none()
+
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Usuario no autenticado.")
+
+    # Desvincular negocio provisional si existe
+    old_biz_id = current_user.business_id
+    if old_biz_id:
+        biz_res = await db.execute(select(BusinessModel).where(BusinessModel.id == old_biz_id))
+        biz = biz_res.scalar_one_or_none()
+        if biz and (not biz.tax_id or str(biz.tax_id).startswith("TMP-") or str(biz.tax_id).startswith("J-TMP-")):
+            current_user.business_id = None
+            try:
+                from sqlalchemy import delete
+                await db.execute(delete(SystemSettingsModel).where(SystemSettingsModel.business_id == old_biz_id))
+                await db.execute(delete(BusinessModel).where(BusinessModel.id == old_biz_id))
+            except Exception:
+                pass
+
+    current_user.business_id = None
+    current_user.branch_id = None
+    current_user.role = "CASHIER"
+    current_user.approval_status = "PENDING"
+    current_user.updated_at = datetime.utcnow()
+    db.add(current_user)
+    await db.commit()
+    await db.refresh(current_user)
+
+    import random
+    code = payload.get("pairing_code")
+    if not code or len(str(code).strip()) != 6:
+        code = f"{random.randint(100000, 999999)}"
+    else:
+        code = str(code).strip()
+
+    req = {
+        "pairing_code": code,
+        "user_id": current_user.id,
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "role": "CASHIER",
+        "branch_id": None,
+        "branch_name": "Pendiente de Asignación",
+        "business_id": None,
+        "status": "PENDING",
+        "created_at": datetime.utcnow().isoformat(),
+        "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+    }
+    global staff_pairings_db
+    staff_pairings_db = [s for s in staff_pairings_db if s.get("user_id") != current_user.id and s["pairing_code"] != code]
+    staff_pairings_db.append(req)
+
+    return {
+        "status": "PENDING",
+        "pairing_code": code,
+        "expires_in_seconds": 900,
+        "qr_payload": f"xion://pair-staff?code={code}",
+        "user": {
+            "id": current_user.id,
+            "email": current_user.email,
+            "full_name": current_user.full_name,
+            "role": current_user.role,
+            "business_id": None,
+            "branch_id": None,
+            "approval_status": "PENDING",
+            "is_active": True,
+            "onboarding_completed": False
+        }
+    }
+
+
 @api_router.post("/staff/request-pairing")
 async def request_staff_pairing(request: Request, payload: dict = Body(...)):
     """
@@ -2647,6 +2737,16 @@ async def approve_staff_request(
             if user:
                 if owner_biz_id:
                     user.business_id = owner_biz_id
+                    await db.execute(
+                        update(UserSessionModel)
+                        .where(UserSessionModel.user_id == user.id)
+                        .values(business_id=owner_biz_id)
+                    )
+                    await db.execute(
+                        update(UserPreferenceModel)
+                        .where(UserPreferenceModel.user_id == user.id)
+                        .values(business_id=owner_biz_id)
+                    )
                 user.branch_id = branch_id
                 user.role = role
                 user.approval_status = "APPROVED"

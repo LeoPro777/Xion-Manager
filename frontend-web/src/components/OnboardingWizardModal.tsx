@@ -407,6 +407,29 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     }
   };
 
+  const handleSelectCollaborator = async () => {
+    setLoading(true);
+    try {
+      const res = await api.selectCollaboratorRole(currentUser.id);
+      if (res.user) {
+        onCompleted(res.user);
+        return;
+      }
+    } catch (e) {
+      console.warn('Error seleccionando rol colaborador:', e);
+    } finally {
+      setLoading(false);
+    }
+    onCompleted({
+      ...currentUser,
+      role: 'CASHIER',
+      business_id: undefined,
+      branch_id: undefined,
+      approval_status: 'PENDING',
+      onboarding_completed: false
+    });
+  };
+
   const getRoleLabel = (r: string) => {
     switch (r) {
       case 'OWNER': return 'Propietario / Dueño';
@@ -565,7 +588,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
                 {/* 2. Otro / Colaborador */}
                 <div
-                  onClick={() => setStep('STAFF_PAIRING')}
+                  onClick={handleSelectCollaborator}
                   className="group relative p-6 rounded-2xl bg-gradient-to-b from-cyan-500/10 via-slate-900/90 to-slate-950 border-2 border-cyan-500/40 hover:border-cyan-400 hover:shadow-xl hover:shadow-cyan-500/10 cursor-pointer transition-all flex flex-col justify-between hover:scale-[1.02]"
                 >
                   <div className="space-y-3">
