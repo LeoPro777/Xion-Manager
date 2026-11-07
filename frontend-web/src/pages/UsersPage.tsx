@@ -141,7 +141,9 @@ export const UsersPage: React.FC = () => {
 
   const handleApproval = async (userId: string, newStatus: 'APPROVED' | 'REJECTED') => {
     const res = await api.updateUserApproval(userId, newStatus);
-    setUsers(users.map(u => u.id === userId ? { ...u, approval_status: newStatus, is_active: newStatus === 'APPROVED' } : u));
+    const currentUserStr = localStorage.getItem('xion_user');
+    const currentBizId = currentUserStr ? JSON.parse(currentUserStr).business_id : undefined;
+    setUsers(users.map(u => u.id === userId ? { ...u, approval_status: newStatus, is_active: newStatus === 'APPROVED', business_id: res.business_id || currentBizId || u.business_id } : u));
     setActionMsg(res.message);
     setTimeout(() => setActionMsg(''), 4000);
   };

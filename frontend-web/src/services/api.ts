@@ -1619,12 +1619,14 @@ export const api = {
     return [];
   },
 
-  async updateUserApproval(userId: string, status: 'APPROVED' | 'REJECTED'): Promise<{ message: string }> {
+  async updateUserApproval(userId: string, status: 'APPROVED' | 'REJECTED'): Promise<{ message: string; business_id?: string }> {
     try {
+      const currentUserStr = localStorage.getItem('xion_user');
+      const currentBizId = currentUserStr ? JSON.parse(currentUserStr).business_id : undefined;
       const res = await fetch('/api/v1/users/approval', {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ user_id: userId, status })
+        body: JSON.stringify({ user_id: userId, status, business_id: currentBizId })
       });
       if (res.ok) {
         return await res.json();
@@ -1641,10 +1643,13 @@ export const api = {
 
   async updateUser(userId: string, data: Partial<User>): Promise<User> {
     try {
+      const currentUserStr = localStorage.getItem('xion_user');
+      const currentBizId = currentUserStr ? JSON.parse(currentUserStr).business_id : undefined;
+      const payload = { business_id: currentBizId, ...data };
       const res = await fetch(`/api/v1/users/${userId}`, {
         method: 'PUT',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify(data)
+        body: JSON.stringify(payload)
       });
       if (res.ok) {
         return await res.json();

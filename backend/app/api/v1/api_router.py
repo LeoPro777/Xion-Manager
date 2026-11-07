@@ -2236,7 +2236,12 @@ async def list_users(
     if current_user and current_user.business_id:
         result = await db.execute(
             select(UserModel)
-            .where(UserModel.business_id == current_user.business_id)
+            .where(
+                or_(
+                    UserModel.business_id == current_user.business_id,
+                    UserModel.business_id.is_(None)
+                )
+            )
             .order_by(UserModel.created_at.desc())
         )
     else:
@@ -2269,16 +2274,22 @@ async def list_users(
 async def update_user(
     user_id: str,
     payload: dict = Body(...),
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Permite al Dueño modificar usuarios, sus roles/permisos, sucursal asignada y propiedades operativas.
     """
     verify_system_operational()
+    current_user = await get_optional_current_user(authorization, db)
+    owner_biz_id = (current_user.business_id if current_user else None) or payload.get("business_id")
     user_res = await db.execute(select(UserModel).where(UserModel.id == user_id))
     user = user_res.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    if not user.business_id and owner_biz_id:
+        user.business_id = owner_biz_id
 
     if "full_name" in payload and payload["full_name"]:
         user.full_name = payload["full_name"]
@@ -2295,10 +2306,24 @@ async def update_user(
         user.approval_status = payload["approval_status"]
         if payload["approval_status"] == "APPROVED":
             user.is_active = True
+            if owner_biz_id:
+                user.business_id = owner_biz_id
         elif payload["approval_status"] == "REJECTED":
             user.is_active = False
 
     user.updated_at = datetime.utcnow()
+    db.add(user)
+    if user.business_id:
+        await db.execute(
+            update(UserSessionModel)
+            .where(UserSessionModel.user_id == user.id)
+            .values(business_id=user.business_id)
+        )
+        await db.execute(
+            update(UserPreferenceModel)
+            .where(UserPreferenceModel.user_id == user.id)
+            .values(business_id=user.business_id)
+        )
     await db.commit()
     await db.refresh(user)
 
@@ -2324,8 +2349,14 @@ async def update_user(
     }
 
 @api_router.post("/users/approval")
-async def user_approval(payload: dict = Body(...), db: AsyncSession = Depends(get_db)):
+async def user_approval(
+    payload: dict = Body(...),
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    current_user = await get_optional_current_user(authorization, db)
+    owner_biz_id = (current_user.business_id if current_user else None) or payload.get("business_id")
     user_id = payload.get("user_id")
     status_val = payload.get("status") or payload.get("status_val", "APPROVED")
     user_res = await db.execute(select(UserModel).where(UserModel.id == user_id))
@@ -2334,13 +2365,28 @@ async def user_approval(payload: dict = Body(...), db: AsyncSession = Depends(ge
         user.approval_status = status_val
         if status_val == "APPROVED":
             user.is_active = True
+            if owner_biz_id:
+                user.business_id = owner_biz_id
         elif status_val == "REJECTED":
             user.is_active = False
         user.updated_at = datetime.utcnow()
+        db.add(user)
+        if user.business_id:
+            await db.execute(
+                update(UserSessionModel)
+                .where(UserSessionModel.user_id == user.id)
+                .values(business_id=user.business_id)
+            )
+            await db.execute(
+                update(UserPreferenceModel)
+                .where(UserPreferenceModel.user_id == user.id)
+                .values(business_id=user.business_id)
+            )
         await db.commit()
     return {
         "user_id": user_id,
         "approval_status": status_val,
+        "business_id": user.business_id if user else None,
         "message": "Estado de aprobación actualizado correctamente"
     }
 
@@ -2485,6 +2531,32 @@ async def select_collaborator_role(
     staff_pairings_db = [s for s in staff_pairings_db if s.get("user_id") != current_user.id and s["pairing_code"] != code]
     staff_pairings_db.append(req)
 
+    # Persistir en la tabla staff_pairings de PostgreSQL para soporte multi-proceso y resiliencia ante reinicios
+    try:
+        from sqlalchemy import text
+        await db.execute(text("""
+            INSERT INTO staff_pairings (pairing_code, user_id, email, full_name, phone, role, status, created_at, expires_at)
+            VALUES (:code, :uid, :email, :fname, :phone, 'CASHIER', 'PENDING', :created_at, :expires_at)
+            ON CONFLICT (pairing_code) DO UPDATE SET
+                user_id = EXCLUDED.user_id,
+                email = EXCLUDED.email,
+                full_name = EXCLUDED.full_name,
+                phone = EXCLUDED.phone,
+                status = 'PENDING',
+                expires_at = EXCLUDED.expires_at
+        """), {
+            "code": code,
+            "uid": current_user.id,
+            "email": current_user.email,
+            "fname": current_user.full_name,
+            "phone": current_user.phone or "",
+            "created_at": datetime.utcnow(),
+            "expires_at": datetime.utcnow() + timedelta(minutes=15)
+        })
+        await db.commit()
+    except Exception:
+        pass
+
     return {
         "status": "PENDING",
         "pairing_code": code,
@@ -2626,6 +2698,29 @@ async def confirm_staff_pairing(
             existing = s
             break
 
+    # Si no está en memoria, consultar la tabla staff_pairings en PostgreSQL
+    if not existing:
+        try:
+            from sqlalchemy import text
+            p_res = await db.execute(text("SELECT pairing_code, user_id, email, full_name, role, branch_id, branch_name, business_id, status, expires_at FROM staff_pairings WHERE pairing_code = :code"), {"code": code})
+            p_row = p_res.fetchone()
+            if p_row:
+                existing = {
+                    "pairing_code": p_row[0],
+                    "user_id": p_row[1],
+                    "email": p_row[2],
+                    "full_name": p_row[3],
+                    "role": p_row[4],
+                    "branch_id": p_row[5],
+                    "branch_name": p_row[6],
+                    "business_id": p_row[7],
+                    "status": p_row[8],
+                    "expires_at": p_row[9].isoformat() if p_row[9] else None
+                }
+                staff_pairings_db.append(existing)
+        except Exception:
+            pass
+
     # Si no existe
     if not existing:
         remaining = record_failed_pairing_attempt(ident)
@@ -2684,7 +2779,21 @@ async def confirm_staff_pairing(
                     user.role = assigned_role
                     user.approval_status = "APPROVED"
                     user.is_active = True
+                    user.updated_at = datetime.utcnow()
+                    db.add(user)
+                    if assigned_biz_id:
+                        await db.execute(
+                            update(UserSessionModel)
+                            .where(UserSessionModel.user_id == user.id)
+                            .values(business_id=assigned_biz_id)
+                        )
+                        await db.execute(
+                            update(UserPreferenceModel)
+                            .where(UserPreferenceModel.user_id == user.id)
+                            .values(business_id=assigned_biz_id)
+                        )
                     await db.commit()
+                    await db.refresh(user)
             except Exception:
                 pass
 
@@ -2706,14 +2815,34 @@ async def confirm_staff_pairing(
     }
 
 @api_router.get("/staff/pending-requests")
-async def list_pending_staff_requests():
+async def list_pending_staff_requests(db: AsyncSession = Depends(get_db)):
     """
     Lista de solicitudes pendientes de personal para el panel del Dueño.
-    Filtra solicitudes expiradas.
+    Combina persistencia en base de datos PostgreSQL con memoria para máxima resiliencia.
     """
     verify_system_operational()
     now = datetime.utcnow()
     valid_requests = []
+    try:
+        from sqlalchemy import text
+        res = await db.execute(text("SELECT pairing_code, user_id, email, full_name, phone, role, branch_id, branch_name, status, created_at, expires_at FROM staff_pairings WHERE status = 'PENDING' AND expires_at > NOW()"))
+        for row in res.fetchall():
+            valid_requests.append({
+                "pairing_code": row[0],
+                "user_id": row[1],
+                "email": row[2],
+                "full_name": row[3],
+                "phone": row[4] or "",
+                "role": row[5] or "CASHIER",
+                "branch_id": row[6],
+                "branch_name": row[7] or "Pendiente de Asignación",
+                "status": row[8],
+                "created_at": row[9].isoformat() if row[9] else None,
+                "expires_at": row[10].isoformat() if row[10] else None
+            })
+    except Exception:
+        pass
+
     for s in staff_pairings_db:
         if s.get("status") == "PENDING":
             exp_str = s.get("expires_at")
@@ -2724,7 +2853,8 @@ async def list_pending_staff_requests():
                         continue
                 except Exception:
                     pass
-            valid_requests.append(s)
+            if not any(v["pairing_code"] == s["pairing_code"] for v in valid_requests):
+                valid_requests.append(s)
     return valid_requests
 
 @api_router.post("/staff/approve-request")
@@ -2805,6 +2935,28 @@ async def approve_staff_request(
             break
 
     if not target_req:
+        try:
+            from sqlalchemy import text
+            p_res = await db.execute(text("SELECT pairing_code, user_id, email, full_name, phone FROM staff_pairings WHERE pairing_code = :code"), {"code": code})
+            p_row = p_res.fetchone()
+            if p_row:
+                target_req = {
+                    "pairing_code": p_row[0],
+                    "user_id": p_row[1],
+                    "email": p_row[2],
+                    "full_name": p_row[3],
+                    "phone": p_row[4],
+                    "status": "APPROVED",
+                    "branch_id": branch_id,
+                    "branch_name": branch_name,
+                    "role": role,
+                    "business_id": owner_biz_id
+                }
+                staff_pairings_db.append(target_req)
+        except Exception:
+            pass
+
+    if not target_req:
         remaining = record_failed_pairing_attempt(ident)
         raise HTTPException(
             status_code=400,
@@ -2855,8 +3007,27 @@ async def approve_staff_request(
                 user.approval_status = "APPROVED"
                 user.is_active = True
                 user.updated_at = datetime.utcnow()
+                db.add(user)
                 await db.commit()
                 await db.refresh(user)
+
+            # Actualizar también tabla staff_pairings en PostgreSQL
+            try:
+                from sqlalchemy import text
+                await db.execute(text("""
+                    UPDATE staff_pairings 
+                    SET status = 'APPROVED', business_id = :biz_id, role = :role, branch_id = :branch_id, branch_name = :branch_name
+                    WHERE pairing_code = :code
+                """), {
+                    "biz_id": owner_biz_id,
+                    "role": role,
+                    "branch_id": branch_id,
+                    "branch_name": branch_name,
+                    "code": code
+                })
+                await db.commit()
+            except Exception:
+                pass
         except Exception:
             pass
 
