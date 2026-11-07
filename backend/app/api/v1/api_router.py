@@ -2359,10 +2359,11 @@ async def user_approval(payload: dict = Body(...), db: AsyncSession = Depends(ge
 # Staff / Employee Pairing DB & Endpoints (Misma lógica de vinculación que las cajas)
 staff_pairings_db: List[dict] = []
 
-# Rate Limiter en memoria para endpoints de vinculación (Prevención de fuerza bruta en códigos de 6 caracteres)
+# Rate Limiter y Rastreador de Intentos Fallidos en memoria para Vinculación (Máximo 5 intentos)
 pairing_rate_limit_store = defaultdict(list)
+pairing_failed_attempts_store: dict[str, dict] = defaultdict(lambda: {"count": 0, "blocked_until": 0.0})
 
-def check_pairing_rate_limit(client_ip: str, max_requests: int = 5, window_seconds: int = 60):
+def check_pairing_rate_limit(client_ip: str, max_requests: int = 10, window_seconds: int = 60):
     now = time.time()
     timestamps = [t for t in pairing_rate_limit_store[client_ip] if now - t < window_seconds]
     if len(timestamps) >= max_requests:
@@ -2374,6 +2375,48 @@ def check_pairing_rate_limit(client_ip: str, max_requests: int = 5, window_secon
         )
     timestamps.append(now)
     pairing_rate_limit_store[client_ip] = timestamps
+
+def check_pairing_attempts(identifier: str, max_allowed: int = 5):
+    """Verifica si el identificador está bloqueado por exceder el límite de 5 intentos fallidos."""
+    now = time.time()
+    record = pairing_failed_attempts_store[identifier]
+    if record["blocked_until"] > now:
+        remaining_secs = int(record["blocked_until"] - now)
+        mins = remaining_secs // 60 + 1
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Has superado el límite de {max_allowed} intentos fallidos. Bloqueado temporalmente. Intenta nuevamente en {mins} minutos."
+        )
+
+def record_failed_pairing_attempt(identifier: str, max_allowed: int = 5, block_minutes: int = 10) -> int:
+    """Registra un fallo. Al 5to intento erróneo bloquea por 10 minutos. Retorna los intentos restantes."""
+    now = time.time()
+    record = pairing_failed_attempts_store[identifier]
+    if record["blocked_until"] > now:
+        remaining_secs = int(record["blocked_until"] - now)
+        mins = remaining_secs // 60 + 1
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Has superado el límite de {max_allowed} intentos fallidos. Bloqueado temporalmente. Intenta nuevamente en {mins} minutos."
+        )
+    if record["blocked_until"] > 0 and record["blocked_until"] <= now:
+        record["count"] = 0
+        record["blocked_until"] = 0.0
+
+    record["count"] += 1
+    remaining = max_allowed - record["count"]
+    if record["count"] >= max_allowed:
+        record["blocked_until"] = now + (block_minutes * 60)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Has superado el límite de {max_allowed} intentos fallidos. Por motivos de seguridad, la vinculación queda bloqueada temporalmente por {block_minutes} minutos."
+        )
+    return max(remaining, 0)
+
+def reset_failed_pairing_attempts(identifier: str):
+    """Limpia los intentos fallidos al tener éxito."""
+    if identifier in pairing_failed_attempts_store:
+        del pairing_failed_attempts_store[identifier]
 
 
 @api_router.post("/staff/select-collaborator-role")
@@ -2507,7 +2550,10 @@ async def request_staff_pairing(request: Request, payload: dict = Body(...)):
     }
 
 @api_router.get("/staff/pairing-status/{pairing_code}")
-async def get_staff_pairing_status(pairing_code: str):
+async def get_staff_pairing_status(
+    pairing_code: str,
+    db: AsyncSession = Depends(get_db)
+):
     """
     Consulta el estado de aprobación del código de vinculación de personal (6 dígitos numéricos).
     Valida vigencia temporal (15 minutos) y normaliza formato.
@@ -2535,21 +2581,80 @@ async def get_staff_pairing_status(pairing_code: str):
                         }
                 except Exception:
                     pass
+
+            if s.get("status") == "APPROVED":
+                biz_id = s.get("business_id")
+                uid = s.get("user_id")
+                if uid and biz_id:
+                    try:
+                        u_res = await db.execute(select(UserModel).where(UserModel.id == uid))
+                        u = u_res.scalar_one_or_none()
+                        if u and u.business_id != biz_id:
+                            u.business_id = biz_id
+                            u.role = s.get("role", u.role)
+                            u.branch_id = s.get("branch_id", u.branch_id)
+                            u.approval_status = "APPROVED"
+                            u.is_active = True
+                            await db.commit()
+                    except Exception:
+                        pass
+                return s
+
             return s
     return {"status": "PENDING", "pairing_code": code}
 
 @api_router.post("/staff/confirm-pairing")
-async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db: AsyncSession = Depends(get_db)):
+async def confirm_staff_pairing(
+    request: Request,
+    payload: dict = Body(...),
+    db: AsyncSession = Depends(get_db)
+):
     """
     Registra el intento de vinculación del colaborador ingresando el código emitido.
-    Aplica rate limit estricto (máx 10 intentos/minuto), valida expiración y verifica autorización.
+    Aplica rate limit estricto y límite de 5 intentos fallidos con bloqueo temporal.
     """
     client_ip = request.client.host if request.client else "127.0.0.1"
     check_pairing_rate_limit(client_ip, max_requests=10, window_seconds=60)
+    ident = f"confirm_{client_ip}"
+    check_pairing_attempts(ident)
 
     code = (payload.get("pairing_code") or "").strip().upper().replace("XM-", "").replace("XM", "")
     if not code:
-        raise HTTPException(status_code=400, detail="Debes proporcionar un código numérico de 6 dígitos válido.")
+        remaining = record_failed_pairing_attempt(ident)
+        raise HTTPException(status_code=400, detail=f"Debes proporcionar un código numérico de 6 dígitos válido. Intentos restantes: {remaining}.")
+
+    # Verificar si el código ya existe en la base de solicitudes
+    existing = None
+    for s in staff_pairings_db:
+        if s["pairing_code"] == code or s["pairing_code"] == f"XM-{code}":
+            existing = s
+            break
+
+    # Si no existe
+    if not existing:
+        remaining = record_failed_pairing_attempt(ident)
+        raise HTTPException(status_code=400, detail=f"Código de vinculación '{code}' no encontrado o no existe. Intentos restantes: {remaining}.")
+
+    # Verificar si fue rechazada
+    if existing.get("status") == "REJECTED":
+        remaining = record_failed_pairing_attempt(ident)
+        raise HTTPException(status_code=400, detail=f"Esta solicitud de vinculación fue rechazada por el dueño. Intentos restantes: {remaining}.")
+
+    # Verificar si expiró
+    if existing.get("expires_at"):
+        try:
+            exp_dt = datetime.fromisoformat(existing["expires_at"])
+            if exp_dt < datetime.utcnow():
+                existing["status"] = "EXPIRED"
+                remaining = record_failed_pairing_attempt(ident)
+                raise HTTPException(status_code=400, detail=f"El código de vinculación ha expirado. Solicita un nuevo código. Intentos restantes: {remaining}.")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    # Restablecer intentos fallidos tras código válido
+    reset_failed_pairing_attempts(ident)
 
     role = payload.get("role", "CASHIER")
     branch_id = payload.get("branch_id")
@@ -2560,31 +2665,8 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db:
                 branch_name = b["name"]
                 break
 
-    # Verificar si el código ya existe en la base de solicitudes
-    existing = None
-    for s in staff_pairings_db:
-        if s["pairing_code"] == code or s["pairing_code"] == f"XM-{code}":
-            existing = s
-            break
-
-    # Verificar si fue rechazada
-    if existing and existing.get("status") == "REJECTED":
-        raise HTTPException(status_code=400, detail="Esta solicitud de vinculación fue rechazada por el dueño. Solicita o genera un nuevo código.")
-
-    # Verificar si expiró
-    if existing and existing.get("expires_at"):
-        try:
-            exp_dt = datetime.fromisoformat(existing["expires_at"])
-            if exp_dt < datetime.utcnow():
-                existing["status"] = "EXPIRED"
-                raise HTTPException(status_code=400, detail="El código de vinculación ha expirado. Solicita un nuevo código.")
-        except HTTPException:
-            raise
-        except Exception:
-            pass
-
     # Si ya existía y el dueño ya la autorizó explícitamente desde Users
-    if existing and existing.get("status") == "APPROVED":
+    if existing.get("status") == "APPROVED":
         assigned_role = existing.get("role", role)
         assigned_branch = existing.get("branch_id", branch_id)
         assigned_biz_id = existing.get("business_id")
@@ -2592,7 +2674,6 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db:
         email = payload.get("email") or existing.get("email")
         if uid or email:
             try:
-                from sqlalchemy import or_
                 cond = []
                 if uid:
                     cond.append(UserModel.id == uid)
@@ -2615,27 +2696,11 @@ async def confirm_staff_pairing(request: Request, payload: dict = Body(...), db:
             "status": "APPROVED",
             "message": f"Personal vinculado exitosamente como {assigned_role}",
             "role": assigned_role,
+            "business_id": assigned_biz_id,
             "branch_id": assigned_branch,
             "branch_name": existing.get("branch_name", branch_name),
             "onboarding_completed": True
         }
-
-    # Si no había sido aprobada, se registra/actualiza en estado PENDING y debe esperar al dueño
-    if not existing:
-        req = {
-            "pairing_code": code,
-            "user_id": payload.get("user_id"),
-            "email": payload.get("email") or f"colaborador.{code}@xion.com",
-            "full_name": payload.get("full_name") or "Nuevo Colaborador",
-            "role": role,
-            "branch_id": branch_id,
-            "branch_name": branch_name,
-            "business_id": payload.get("business_id"),
-            "status": "PENDING",
-            "created_at": datetime.utcnow().isoformat(),
-            "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
-        }
-        staff_pairings_db.append(req)
 
     return {
         "status": "PENDING",
@@ -2668,6 +2733,7 @@ async def list_pending_staff_requests():
 
 @api_router.post("/staff/approve-request")
 async def approve_staff_request(
+    request: Request,
     payload: dict = Body(...),
     authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
@@ -2675,12 +2741,43 @@ async def approve_staff_request(
     """
     El Dueño aprueba una solicitud de vinculación de personal asignando el rol y sucursal correspondientes.
     Vincula el colaborador exclusivamente al negocio (Tenant) del dueño actual.
+    Aplica límite de 5 intentos fallidos y bloqueo temporal.
     """
     verify_system_operational()
+    client_ip = request.client.host if request.client else "127.0.0.1"
     current_user = await get_optional_current_user(authorization, db)
-    owner_biz_id = current_user.business_id if current_user else None
+    ident = f"approve_{current_user.id if current_user else client_ip}"
+    check_pairing_attempts(ident)
+
+    # 1. Determinar el business_id del Dueño con máxima prioridad
+    owner_biz_id = payload.get("business_id") or (current_user.business_id if current_user else None)
+    if not owner_biz_id and current_user:
+        biz_check = await db.execute(select(BusinessModel).where(BusinessModel.id == current_user.business_id))
+        biz_found = biz_check.scalar_one_or_none()
+        if biz_found:
+            owner_biz_id = biz_found.id
+
+    if not owner_biz_id:
+        biz_def = await db.execute(
+            select(BusinessModel)
+            .where(~BusinessModel.tax_id.like("J-TMP-%"), ~BusinessModel.tax_id.like("TMP-%"))
+            .order_by(BusinessModel.created_at.desc())
+            .limit(1)
+        )
+        found_def = biz_def.scalar_one_or_none()
+        if not found_def:
+            biz_def = await db.execute(select(BusinessModel).order_by(BusinessModel.created_at.desc()).limit(1))
+            found_def = biz_def.scalar_one_or_none()
+        if found_def:
+            owner_biz_id = found_def.id
 
     code = (payload.get("pairing_code") or "").strip().upper().replace("XM-", "").replace("XM", "")
+    if not code:
+        remaining = record_failed_pairing_attempt(ident)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Debes proporcionar un código de vinculación válido. Intentos restantes: {remaining}."
+        )
 
     branch_id = payload.get("branch_id")
     role = payload.get("role") or "CASHIER"
@@ -2705,28 +2802,21 @@ async def approve_staff_request(
             target_req = s
             break
 
-    # Si no existía solicitud previa, el dueño está pre-creando la autorización
     if not target_req:
-        target_req = {
-            "pairing_code": code,
-            "status": "APPROVED",
-            "business_id": owner_biz_id,
-            "branch_id": branch_id,
-            "branch_name": branch_name,
-            "role": role,
-            "full_name": payload.get("full_name") or f"Colaborador ({role})",
-            "email": payload.get("email") or f"colaborador.{code}@xion.com",
-            "created_at": datetime.utcnow().isoformat(),
-            "expires_at": (datetime.utcnow() + timedelta(minutes=60)).isoformat()
-        }
-        staff_pairings_db.append(target_req)
+        remaining = record_failed_pairing_attempt(ident)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Código de vinculación '{code}' no encontrado o no existe. Intentos restantes: {remaining}."
+        )
+
+    # Restablecer intentos fallidos
+    reset_failed_pairing_attempts(ident)
 
     # Actualizar estado del usuario en la base de datos si existe y vincularlo al tenant del dueño
     uid = target_req.get("user_id")
     email = target_req.get("email")
     if uid or email:
         try:
-            from sqlalchemy import or_
             cond = []
             if uid:
                 cond.append(UserModel.id == uid)
@@ -2735,6 +2825,16 @@ async def approve_staff_request(
             user_res = await db.execute(select(UserModel).where(or_(*cond)))
             user = user_res.scalar_one_or_none()
             if user:
+                # Si el usuario tenía un negocio provisional previo propio, purgarlo
+                old_biz = user.business_id
+                if old_biz and old_biz != owner_biz_id:
+                    try:
+                        from sqlalchemy import delete
+                        await db.execute(delete(SystemSettingsModel).where(SystemSettingsModel.business_id == old_biz))
+                        await db.execute(delete(BusinessModel).where(BusinessModel.id == old_biz))
+                    except Exception:
+                        pass
+
                 if owner_biz_id:
                     user.business_id = owner_biz_id
                     await db.execute(
@@ -2747,18 +2847,21 @@ async def approve_staff_request(
                         .where(UserPreferenceModel.user_id == user.id)
                         .values(business_id=owner_biz_id)
                     )
+
                 user.branch_id = branch_id
                 user.role = role
                 user.approval_status = "APPROVED"
                 user.is_active = True
                 user.updated_at = datetime.utcnow()
                 await db.commit()
+                await db.refresh(user)
         except Exception:
             pass
 
     return {
         "status": "APPROVED",
         "message": f"Personal vinculado y autorizado con éxito como {role}",
+        "business_id": owner_biz_id,
         "request": target_req
     }
 

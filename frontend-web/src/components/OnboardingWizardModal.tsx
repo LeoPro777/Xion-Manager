@@ -198,7 +198,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
           handleExecuteStaffConnection(
             res.branch_id || selectedBranchId,
             res.branch_name || 'Sucursal Asignada',
-            res.role || 'CASHIER'
+            res.role || 'CASHIER',
+            (res as any).business_id
           );
         } else if (res.status === 'REJECTED') {
           setPairingStatus('REJECTED');
@@ -260,7 +261,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     setTimeout(() => setIsCopiedShare(false), 2500);
   };
 
-  const handleExecuteStaffConnection = (branchId: string, branchName: string, role: Role) => {
+  const handleExecuteStaffConnection = (branchId: string, branchName: string, role: Role, businessId?: string) => {
     setPairingSuccessMsg(`¡Vinculación aprobada por el Propietario! Ingresando como ${getRoleLabel(role)}...`);
     setIsPairingStaff(true);
 
@@ -268,6 +269,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
       const updatedUser: User = {
         ...currentUser,
         role: role,
+        business_id: businessId || currentUser.business_id,
         branch_id: branchId,
         branch_name: branchName,
         approval_status: 'APPROVED',
@@ -302,7 +304,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         handleExecuteStaffConnection(
           res.branch_id || 'branch-1',
           res.branch_name || 'Sucursal Asignada',
-          res.role || 'CASHIER'
+          res.role || 'CASHIER',
+          (res as any).business_id
         );
       } else {
         setIsPairingStaff(false);
@@ -321,7 +324,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     const targetCode = codeToApprove || submittedManualCode || staffPairingCode;
     const branch = branchesList.find(b => b.id === selectedBranchId) || branchesList[0] || { id: 'branch-1', name: 'Sucursal Principal - Centro' };
     const res = await api.approveStaffPairingRequest(targetCode, branch.id, 'CASHIER');
-    handleExecuteStaffConnection(branch.id, branch.name, res?.request?.role || 'CASHIER');
+    handleExecuteStaffConnection(branch.id, branch.name, res?.request?.role || 'CASHIER', (res as any)?.business_id || res?.request?.business_id);
   };
 
   const handleAddAdditionalCompany = () => {

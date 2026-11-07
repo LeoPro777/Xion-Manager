@@ -996,17 +996,23 @@ export const api = {
     return [];
   },
 
-  async approveStaffPairingRequest(pairingCode: string, branchId?: string, role?: Role): Promise<{ message: string; request?: any }> {
+  async approveStaffPairingRequest(pairingCode: string, branchId?: string, role?: Role, businessId?: string): Promise<{ message: string; business_id?: string; request?: any }> {
     try {
       const res = await fetch('/api/v1/staff/approve-request', {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ pairing_code: pairingCode, branch_id: branchId, role })
+        body: JSON.stringify({ pairing_code: pairingCode, branch_id: branchId, role, business_id: businessId })
       });
       if (res.ok) {
         return await res.json();
       }
-    } catch {}
+      const errData = await res.json().catch(() => ({}));
+      const err: any = new Error(errData.detail || 'Error al autorizar el código de vinculación');
+      err.status = res.status;
+      throw err;
+    } catch (e: any) {
+      if (e?.status) throw e;
+    }
     return { message: 'Solicitud aprobada y colaborador vinculado' };
   },
 

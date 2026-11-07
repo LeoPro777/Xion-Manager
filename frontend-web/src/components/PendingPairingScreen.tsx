@@ -96,10 +96,17 @@ export const PendingPairingScreen: React.FC<PendingPairingScreenProps> = ({
           try {
             const freshUser = await api.getCurrentUser();
             if (freshUser) {
-              localStorage.setItem('xion_user', JSON.stringify(freshUser));
+              const freshUpdated: User = {
+                ...freshUser,
+                business_id: (res as any).business_id || freshUser.business_id,
+                role: res.role || freshUser.role || 'CASHIER',
+                approval_status: 'APPROVED',
+                onboarding_completed: true
+              };
+              localStorage.setItem('xion_user', JSON.stringify(freshUpdated));
               localStorage.setItem(`xion_onboarding_completed_${freshUser.id}`, 'true');
               setTimeout(() => {
-                onApproved(freshUser);
+                onApproved(freshUpdated);
               }, 1200);
               return;
             }
@@ -107,6 +114,7 @@ export const PendingPairingScreen: React.FC<PendingPairingScreenProps> = ({
 
           const updated: User = {
             ...currentUser,
+            business_id: (res as any).business_id || currentUser.business_id,
             role: res.role || 'CASHIER',
             branch_id: res.branch_id,
             branch_name: res.branch_name || 'Sucursal Asignada',

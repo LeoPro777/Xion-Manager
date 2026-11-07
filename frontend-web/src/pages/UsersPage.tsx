@@ -112,15 +112,18 @@ export const UsersPage: React.FC = () => {
     try {
       const activeBranch = branchId || selectedBranchId || branches[0]?.id;
       const targetRole = roleOverride || selectedRole;
-      const res = await api.approveStaffPairingRequest(code, activeBranch, targetRole);
+      const currentUserStr = localStorage.getItem('xion_user');
+      const currentBizId = currentUserStr ? JSON.parse(currentUserStr).business_id : undefined;
+      const res = await api.approveStaffPairingRequest(code, activeBranch, targetRole, currentBizId);
       setActionMsg(res.message || `Personal autorizado exitosamente con código ${code}`);
       setUsers(await api.getUsers());
       setPendingRequests(prev => prev.filter(p => p.pairing_code !== code));
       setShowPairingModal(false);
       setPairingInputCode('');
       setTimeout(() => setActionMsg(''), 4000);
-    } catch {
-      setActionMsg('Error autorizando código');
+    } catch (err: any) {
+      setActionMsg(err?.message || 'Error autorizando código');
+      setTimeout(() => setActionMsg(''), 5000);
     } finally {
       setIsApproving(false);
     }
