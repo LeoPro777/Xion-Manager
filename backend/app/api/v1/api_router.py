@@ -798,18 +798,21 @@ async def _create_user_session_and_get_prefs(
 async def _check_user_onboarding_completed(user: UserModel, db: AsyncSession) -> bool:
     """
     Determina si un usuario ha completado el onboarding:
-    - Si no es OWNER (empleados, cajeros, supervisores), no realiza onboarding empresarial -> True
-    - Si es OWNER, verifica si el negocio ya posee un RIF/tax_id definitivo (no TMP-) -> True/False
+    - Si no tiene business_id: False (no tiene empresa registrada ni está vinculado)
+    - Si no es OWNER (empleados, cajeros, supervisores):
+      retorna True solo si tiene business_id y su estado es APPROVED
+    - Si es OWNER:
+      verifica si el negocio existe y tiene RIF/tax_id definitivo (no TMP-) -> True/False
     """
     if not user:
         return True
-    if user.role != "OWNER":
-        return True
     if not user.business_id:
         return False
+    if user.role != "OWNER":
+        return user.approval_status == "APPROVED"
     biz_res = await db.execute(select(BusinessModel).where(BusinessModel.id == user.business_id))
     biz = biz_res.scalar_one_or_none()
-    if not biz or not biz.tax_id or str(biz.tax_id).startswith("TMP-"):
+    if not biz or not biz.tax_id or str(biz.tax_id).startswith("TMP-") or str(biz.tax_id).startswith("J-TMP-"):
         return False
     return True
 
@@ -906,38 +909,9 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
     is_new_user = False
     if not user:
         is_new_user = True
-        # Cada nuevo usuario crea su propio Tenant / Negocio aislado con ID y RIF único provisional
-        new_biz_id = f"biz-{uuid.uuid4().hex[:12]}"
-        provisional_tax_id = f"J-TMP-{uuid.uuid4().hex[:8].upper()}"
-        provisional_biz_email = email
-        biz_check = await db.execute(select(BusinessModel).where(BusinessModel.email == email))
-        if biz_check.scalar_one_or_none():
-            provisional_biz_email = f"empresa-{uuid.uuid4().hex[:6]}@{email.split('@')[-1] if '@' in email else 'xion.com'}"
-
-        biz = BusinessModel(
-            id=new_biz_id,
-            legal_name=f"Empresa de {name}",
-            trade_name="Mi Comercio",
-            tax_id=provisional_tax_id,
-            phone="+58 414-0000000",
-            email=provisional_biz_email,
-            is_active=True,
-            status="active"
-        )
-        db.add(biz)
-        await db.flush()
-
-        sys_setting = SystemSettingsModel(
-            business_id=biz.id,
-            current_exchange_rate_bs=36.50,
-            tax_rate=16.00,
-            enable_taxes=True,
-            auto_sync_pos=True,
-            currency_symbol="Bs.",
-            updated_at=datetime.utcnow()
-        )
-        db.add(sys_setting)
-
+        # El usuario nuevo se crea sin empresa (business_id = None).
+        # La empresa se registra en la BD únicamente cuando completa el formulario de Dueño (/onboarding/complete).
+        # Si es otro usuario (colaborador), se vinculará al negocio del Dueño que lo autorice.
         user = UserModel(
             id=f"usr-{uuid.uuid4().hex[:12]}",
             email=email,
@@ -945,14 +919,13 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
             full_name=name,
             avatar_url=google_data.get("picture"),
             role="OWNER",
-            business_id=biz.id,
+            business_id=None,
             approval_status="APPROVED",
             is_active=True
         )
         db.add(user)
         await db.commit()
         await db.refresh(user)
-        await db.refresh(biz)
     else:
         if google_data.get("picture") and not user.avatar_url:
             user.avatar_url = google_data.get("picture")
@@ -1104,40 +1077,9 @@ async def register_user(payload: RegisterUserRequest, request: Request, db: Asyn
             detail="Ya existe una cuenta registrada con este correo electrónico."
         )
 
-    # 1. Crear nuevo Tenant / Negocio independiente (Patrón Multi-Tenant SaaS)
-    new_biz_id = f"biz-{uuid.uuid4().hex[:12]}"
-    provisional_tax_id = f"J-TMP-{uuid.uuid4().hex[:8].upper()}"
-    provisional_biz_email = email
-    biz_check = await db.execute(select(BusinessModel).where(BusinessModel.email == email))
-    if biz_check.scalar_one_or_none():
-        provisional_biz_email = f"empresa-{uuid.uuid4().hex[:6]}@{email.split('@')[-1] if '@' in email else 'xion.com'}"
-
-    new_biz = BusinessModel(
-        id=new_biz_id,
-        legal_name=f"Empresa de {payload.full_name}",
-        trade_name="Mi Comercio",
-        tax_id=provisional_tax_id,
-        phone=payload.phone or "+58 414-0000000",
-        email=provisional_biz_email,
-        is_active=True,
-        status="active"
-    )
-    db.add(new_biz)
-    await db.flush()
-
-    # 2. Inicializar parámetros del sistema para este tenant
-    sys_setting = SystemSettingsModel(
-        business_id=new_biz.id,
-        current_exchange_rate_bs=36.50,
-        tax_rate=16.00,
-        enable_taxes=True,
-        auto_sync_pos=True,
-        currency_symbol="Bs.",
-        updated_at=datetime.utcnow()
-    )
-    db.add(sys_setting)
-
-    # 3. Crear usuario Dueño (OWNER) asignado exclusivamente a su propio negocio
+    # El usuario nuevo se registra sin empresa (business_id = None).
+    # La empresa se registra en la BD únicamente cuando completa el formulario de Dueño (/onboarding/complete).
+    # Si es otro usuario (colaborador), se vinculará al negocio del Dueño que lo autorice.
     user = UserModel(
         id=f"usr-{uuid.uuid4().hex[:12]}",
         email=email,
@@ -1145,14 +1087,13 @@ async def register_user(payload: RegisterUserRequest, request: Request, db: Asyn
         full_name=payload.full_name,
         phone=payload.phone,
         role="OWNER",
-        business_id=new_biz.id,
+        business_id=None,
         approval_status="APPROVED",
         is_active=True
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    await db.refresh(new_biz)
 
     jwt_token, session, pref = await _create_user_session_and_get_prefs(user, request, db)
 
@@ -1212,11 +1153,13 @@ async def complete_onboarding(
     if not user:
         raise HTTPException(status_code=400, detail="Usuario no especificado o no autenticado.")
 
-    # 1. Actualizar datos de usuario si se especificó
+    # 1. Actualizar datos de usuario si se especificó y asegurar rol Dueño
     if payload.full_name:
         user.full_name = payload.full_name
     if payload.phone:
         user.phone = payload.phone
+    user.role = "OWNER"
+    user.approval_status = "APPROVED"
     db.add(user)
 
     # 2. Actualizar o crear Compañía Principal vinculada exclusivamente a este usuario
@@ -1235,7 +1178,8 @@ async def complete_onboarding(
             tax_id=p_comp.tax_id,
             phone=p_comp.phone or user.phone or "+58 414-0000000",
             email=p_comp.email or user.email,
-            is_active=True
+            is_active=True,
+            status="active"
         )
         db.add(biz)
         user.business_id = biz.id
@@ -1247,10 +1191,13 @@ async def complete_onboarding(
             biz.phone = p_comp.phone
         if p_comp.email:
             biz.email = p_comp.email
+        biz.is_active = True
+        biz.status = "active"
         db.add(biz)
 
     await db.commit()
     await db.refresh(biz)
+    await db.refresh(user)
 
     # 3. Guardar configuraciones del sistema del tenant específico
     sys_res = await db.execute(select(SystemSettingsModel).where(SystemSettingsModel.business_id == biz.id))
@@ -1279,6 +1226,36 @@ async def complete_onboarding(
             sys_setting.currency_symbol = payload.currency_symbol
         sys_setting.updated_at = datetime.utcnow()
         db.add(sys_setting)
+
+    # Actualizar sesiones y preferencias con el nuevo business_id
+    await db.execute(
+        update(UserSessionModel)
+        .where(UserSessionModel.user_id == user.id)
+        .values(business_id=biz.id)
+    )
+    await db.execute(
+        update(UserPreferenceModel)
+        .where(UserPreferenceModel.user_id == user.id)
+        .values(business_id=biz.id)
+    )
+
+    # Asegurar sucursal por defecto para este negocio
+    existing_branch = next((b for b in branches_db if b.get("business_id") == biz.id), None)
+    if not existing_branch:
+        default_branch_id = f"br-{uuid.uuid4().hex[:8]}"
+        branches_db.append({
+            "id": default_branch_id,
+            "business_id": biz.id,
+            "name": f"Principal - {biz.trade_name or biz.legal_name}",
+            "code": "SUC-01",
+            "is_main": True,
+            "is_active": True,
+            "phone": biz.phone,
+            "address": p_comp.address or "Sede Principal",
+            "created_at": datetime.utcnow().isoformat()
+        })
+        user.branch_id = default_branch_id
+        db.add(user)
 
     await db.commit()
 
@@ -1357,6 +1334,17 @@ async def complete_onboarding(
             "tax_rate": float(sys_setting.tax_rate),
             "enable_taxes": bool(sys_setting.enable_taxes),
             "auto_sync_pos": bool(sys_setting.auto_sync_pos)
+        },
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "phone": user.phone,
+            "role": user.role,
+            "business_id": user.business_id,
+            "branch_id": user.branch_id,
+            "approval_status": user.approval_status,
+            "onboarding_completed": True
         },
         "onboarding_completed": True
     }
@@ -2443,6 +2431,12 @@ async def select_collaborator_role(
     if not current_user:
         raise HTTPException(status_code=401, detail="Usuario no autenticado.")
 
+    # Guardar datos básicos si fueron proporcionados
+    if payload.get("full_name"):
+        current_user.full_name = str(payload.get("full_name")).strip()
+    if payload.get("phone"):
+        current_user.phone = str(payload.get("phone")).strip()
+
     # Desvincular negocio provisional si existe
     old_biz_id = current_user.business_id
     if old_biz_id:
@@ -2478,6 +2472,7 @@ async def select_collaborator_role(
         "user_id": current_user.id,
         "email": current_user.email,
         "full_name": current_user.full_name,
+        "phone": current_user.phone or "",
         "role": "CASHIER",
         "branch_id": None,
         "branch_name": "Pendiente de Asignación",
@@ -2499,6 +2494,7 @@ async def select_collaborator_role(
             "id": current_user.id,
             "email": current_user.email,
             "full_name": current_user.full_name,
+            "phone": current_user.phone,
             "role": current_user.role,
             "business_id": None,
             "branch_id": None,
@@ -2770,6 +2766,12 @@ async def approve_staff_request(
             found_def = biz_def.scalar_one_or_none()
         if found_def:
             owner_biz_id = found_def.id
+
+    if not owner_biz_id:
+        raise HTTPException(
+            status_code=400,
+            detail="El Dueño debe completar primero la configuración de su empresa antes de vincular personal."
+        )
 
     code = (payload.get("pairing_code") or "").strip().upper().replace("XM-", "").replace("XM", "")
     if not code:

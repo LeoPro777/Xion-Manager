@@ -1030,7 +1030,7 @@ export const api = {
     return { message: 'Solicitud descartada' };
   },
 
-  async selectCollaboratorRole(userId?: string): Promise<{
+  async selectCollaboratorRole(userId?: string, basicInfo?: { full_name?: string; phone?: string }): Promise<{
     status: string;
     pairing_code: string;
     expires_in_seconds: number;
@@ -1038,10 +1038,13 @@ export const api = {
     user: User;
   }> {
     try {
+      const payload: any = { user_id: userId };
+      if (basicInfo?.full_name) payload.full_name = basicInfo.full_name;
+      if (basicInfo?.phone) payload.phone = basicInfo.phone;
       const res = await fetch('/api/v1/staff/select-collaborator-role', {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ user_id: userId })
+        body: JSON.stringify(payload)
       });
       if (res.ok) {
         const data = await res.json();

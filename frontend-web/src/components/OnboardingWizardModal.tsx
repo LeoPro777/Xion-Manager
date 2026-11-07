@@ -28,8 +28,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   currentUser, 
   onCompleted 
 }) => {
-  // Pasos: 0 (Selección de Rol) | 1, 2, 3 (Wizard Propietario) | 'STAFF_PAIRING' (Vinculación Colaborador)
-  const [step, setStep] = useState<0 | 1 | 2 | 3 | 'STAFF_PAIRING'>(0);
+  // Pasos: 0 (Selección de Rol) | 1, 2, 3 (Wizard Propietario) | 'COLLABORATOR_BASIC_INFO' (Datos Básicos) | 'STAFF_PAIRING' (Vinculación Colaborador)
+  const [step, setStep] = useState<0 | 1 | 2 | 3 | 'STAFF_PAIRING' | 'COLLABORATOR_BASIC_INFO'>(0);
   const [loading, setLoading] = useState(false);
   const [plans, setPlans] = useState<XionPayPlan[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -388,7 +388,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         billing_cycle: selectedBillingCycle
       };
 
-      await api.completeOnboarding(payload);
+      const res = await api.completeOnboarding(payload);
 
       localStorage.setItem(`xion_onboarding_completed_${currentUser.id}`, 'true');
 
@@ -396,7 +396,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         ...currentUser,
         full_name: fullName,
         phone: personalPhone,
+        business_id: (res as any)?.business?.id || (res as any)?.user?.business_id || currentUser.business_id,
         role: 'OWNER',
+        approval_status: 'APPROVED',
         onboarding_completed: true
       };
       localStorage.setItem('xion_user', JSON.stringify(updatedUser));
@@ -410,21 +412,36 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     }
   };
 
-  const handleSelectCollaborator = async () => {
+  const handleSelectCollaborator = () => {
+    setStep('COLLABORATOR_BASIC_INFO');
+  };
+
+  const handleConfirmCollaboratorInfo = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!fullName.trim()) {
+      setErrorMsg('Por favor ingresa tu nombre completo.');
+      return;
+    }
+    setErrorMsg(null);
     setLoading(true);
     try {
-      const res = await api.selectCollaboratorRole(currentUser.id);
-      if (res.user) {
+      const res = await api.selectCollaboratorRole(currentUser.id, {
+        full_name: fullName.trim(),
+        phone: personalPhone.trim()
+      });
+      if (res && res.user) {
         onCompleted(res.user);
         return;
       }
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Error seleccionando rol colaborador:', e);
     } finally {
       setLoading(false);
     }
     onCompleted({
       ...currentUser,
+      full_name: fullName.trim() || currentUser.full_name,
+      phone: personalPhone.trim() || currentUser.phone,
       role: 'CASHIER',
       business_id: undefined,
       branch_id: undefined,
@@ -468,7 +485,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                 <span className="text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
                   Bienvenido a Xion-Manager
                 </span>
-                {step === 'STAFF_PAIRING' && (
+                {(step === 'STAFF_PAIRING' || step === 'COLLABORATOR_BASIC_INFO') && (
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
                     Acceso Colaborador
                   </span>
@@ -476,6 +493,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
               </div>
               <h2 className="text-lg sm:text-xl font-black text-white mt-0.5">
                 {step === 0 && 'Selección de Perfil de Acceso'}
+                {step === 'COLLABORATOR_BASIC_INFO' && 'Datos Básicos de Colaborador'}
                 {step === 'STAFF_PAIRING' && 'Vinculación de Colaborador a la Empresa'}
                 {step === 1 && 'Paso 1: Datos de tu Empresa Principal'}
                 {step === 2 && 'Paso 2: Parámetros del Sistema'}
@@ -628,6 +646,79 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   <strong>Flujo Seguro de Vinculación:</strong> Si eres colaborador, solo necesitas emitir tu código de 6 dígitos. El dueño lo ingresará en el módulo de Usuarios y definirá tus permisos.
                 </span>
               </div>
+            </div>
+          )}
+
+          {/* ============================================================ */}
+          {/* PASO: DATOS BÁSICOS DE COLABORADOR                           */}
+          {/* ============================================================ */}
+          {step === 'COLLABORATOR_BASIC_INFO' && (
+            <div className="space-y-6 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => setStep(0)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-slate-300 text-xs font-bold flex items-center gap-1.5 border border-slate-700 transition-all"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>Volver a Selección</span>
+                </button>
+                <span className="text-[10px] font-black uppercase px-2.5 py-1 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                  Acceso Colaborador
+                </span>
+              </div>
+
+              <div className="text-center space-y-1.5 max-w-lg mx-auto">
+                <div className="w-12 h-12 rounded-2xl bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-300 mx-auto shadow-md">
+                  <UserCheck className="w-6 h-6" />
+                </div>
+                <h3 className="text-base sm:text-lg font-black text-white">
+                  Tus Datos Básicos
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Como colaborador no configuras ninguna empresa. Proporciona tus datos básicos para emitir tu código numérico de 6 dígitos y esperar la autorización del Dueño.
+                </p>
+              </div>
+
+              <form onSubmit={handleConfirmCollaboratorInfo} className="space-y-4 max-w-md mx-auto">
+                <div className="space-y-1.5 text-left">
+                  <label className="text-xs font-bold text-slate-300">Nombre Completo *</label>
+                  <input
+                    type="text"
+                    required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Ej. Juan Pérez"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
+                  />
+                </div>
+
+                <div className="space-y-1.5 text-left">
+                  <label className="text-xs font-bold text-slate-300">Teléfono Personal / WhatsApp</label>
+                  <input
+                    type="text"
+                    value={personalPhone}
+                    onChange={(e) => setPersonalPhone(e.target.value)}
+                    placeholder="Ej. +58 412 1234567"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading || !fullName.trim()}
+                  className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/25 flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 min-h-[44px]"
+                >
+                  {loading ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <span>Generar Código de Vinculación</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </form>
             </div>
           )}
 
