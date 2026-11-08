@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     # Xion-Pay Integration
     XION_PAY_BASE_URL: str = "https://xion-pay.onrender.com"
     XION_PAY_TENANT_ID: str = "3bf4dff9-402f-42ce-8148-3f7b6450c9e6"
+    XION_PAY_API_KEY: str = "xion_mgr_sec_dev_2026"
     XION_PAY_WEBHOOK_SECRET: str = "xion_pay_webhook_secret_key"
     XION_PAY_TIMEOUT: float = 10.0
 

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 
@@ -398,27 +398,44 @@ class XionPaySyncResponse(BaseModel):
     accounts_count: int
 
 class XionPayLeadCreate(BaseModel):
-    nombre_contacto: str
-    nombre_comercial: str
     email: str
-    telefono_contacto: str
-    documento_identidad_tipo: Optional[str] = "V"
+    commercial_name: Optional[str] = None
+    contact_name: Optional[str] = None
+    phone: Optional[str] = None
+    tax_id: Optional[str] = None
+    id_doc_type: Optional[str] = "J"
+    plan_code: Optional[str] = "basic"
+    trial_days: Optional[int] = 30
+    webhook_url: Optional[str] = "https://xion-manager.onrender.com/api/v1/licenses/sync"
+
+    # Nomenclatura en español (alternativa / compatibilidad)
+    nombre_contacto: Optional[str] = None
+    nombre_comercial: Optional[str] = None
+    telefono_contacto: Optional[str] = None
+    documento_identidad_tipo: Optional[str] = None
     documento_identidad_numero: Optional[str] = None
-    webhook_url: Optional[str] = None
+    codigo_plan: Optional[str] = None
+    dias_prueba: Optional[int] = None
     source: Optional[str] = "xion-manager"
 
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
 class XionPayLeadResponse(BaseModel):
-    client_id: str
-    commercial_name: str
+    client_id: Optional[str] = None
+    commercial_name: Optional[str] = None
     contact_name: Optional[str] = None
-    email: str
-    phone: str
-    status: str
-    trial_days_granted: int = 30
-    trial_ends_at: str
-    trial_days_remaining: int
-    license_token: str
-    message: str
+    tax_id: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    status: Optional[str] = "trial"
+    trial_days_granted: Optional[int] = 30
+    trial_ends_at: Optional[str] = None
+    trial_days_remaining: Optional[int] = 30
+    license_token: Optional[str] = None
+    webhook_secret: Optional[str] = None
+    message: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
 
 class XionPayWebhookPayload(BaseModel):
     event: str

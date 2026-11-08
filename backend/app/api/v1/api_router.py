@@ -401,6 +401,7 @@ async def sync_xion_pay_data(payload: XionPaySyncPayload):
 
 @api_router.post("/xionpay-webhook", response_model=XionPayWebhookResponse)
 @api_router.post("/webhooks/xion-pay", response_model=XionPayWebhookResponse)
+@api_router.post("/licenses/sync", response_model=XionPayWebhookResponse)
 async def receive_xion_pay_webhook(
     request: Request,
     x_xion_signature: Optional[str] = Header(None, alias="X-Xion-Signature"),
@@ -413,7 +414,8 @@ async def receive_xion_pay_webhook(
     raw_body = await request.body()
     
     # Verificación de firma criptográfica
-    if not XionPayService.verify_webhook_signature(raw_body, x_xion_signature):
+    active_webhook_secret = xion_pay_state.get("webhook_secret")
+    if not XionPayService.verify_webhook_signature(raw_body, x_xion_signature, secret=active_webhook_secret):
         if settings.ENVIRONMENT != "development" or x_xion_signature is not None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -710,6 +712,8 @@ async def onboard_trial_lead(lead: XionPayLeadCreate):
     xion_pay_state["tenant_id"] = result.get("client_id")
     xion_pay_state["license_token"] = result.get("license_token")
     xion_pay_state["license_status"] = result.get("status", "trial")
+    if result.get("webhook_secret"):
+        xion_pay_state["webhook_secret"] = result.get("webhook_secret")
     return result
 
 
@@ -1278,18 +1282,27 @@ async def complete_onboarding(
     if is_trial:
         try:
             lead_data = {
-                "nombre_contacto": payload.full_name or "Usuario Principal",
-                "nombre_comercial": p_comp.trade_name,
+                "commercial_name": p_comp.trade_name or p_comp.legal_name or "Mi Comercio Xion C.A.",
+                "contact_name": payload.full_name or "Usuario Principal",
                 "email": p_comp.email or "contacto@empresa.com",
-                "telefono_contacto": p_comp.phone or payload.phone or "+58 414-1112233",
-                "documento_identidad_tipo": "J" if "J" in p_comp.tax_id.upper() else "V",
-                "documento_identidad_numero": p_comp.tax_id,
+                "phone": p_comp.phone or payload.phone or "+58 414 1234567",
+                "tax_id": p_comp.tax_id or "J-50123456-7",
+                "id_doc_type": "J" if "J" in (p_comp.tax_id or "").upper() else "V",
+                "plan_code": "basic",
+                "trial_days": 30,
+                "webhook_url": "https://xion-manager.onrender.com/api/v1/licenses/sync",
                 "source": "xion-manager-onboarding"
             }
             trial_response = await XionPayService.onboard_trial(lead_data)
             if trial_response.get("status") != "error":
                 xion_pay_state["tenant_id"] = trial_response.get("client_id")
                 xion_pay_state["license_token"] = trial_response.get("license_token")
+                if trial_response.get("webhook_secret"):
+                    xion_pay_state["webhook_secret"] = trial_response.get("webhook_secret")
+                if trial_response.get("license_token"):
+                    biz.license_token = trial_response.get("license_token")
+                    db.add(biz)
+                    await db.commit()
         except Exception:
             pass
 
