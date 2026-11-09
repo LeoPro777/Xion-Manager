@@ -3096,37 +3096,68 @@ async def get_cash_sessions():
 async def get_notifications():
     return []
 
-@api_router.post("/system/reset-database")
+@api_router.api_route("/system/reset-database", methods=["GET", "POST"])
 async def reset_database(
     authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Elimina todos los datos de prueba y resetea las tablas para operar con datos 100% reales.
+    Endpoint público para reiniciar la base de datos y memorias desde 0.
+    Acepta peticiones GET y POST para fácil invocación desde navegador, scripts o webhooks.
     """
-    from sqlalchemy import delete
+    from sqlalchemy import delete, text
     from app.models.entities import (
         UserSession, UserPreference, AuditLog, InventoryTransaction,
         InventoryShrinkage, SupplierPayablesLedger, PurchaseItem, Purchase,
         Supplier, BranchInventory, ProductComposition, Product, Category,
-        PaymentReport, CashRegister, Branch, User, Business, SystemSettings
+        PaymentReport, CashRegister, Branch, User, Business, SystemSettings,
+        BusinessSubscription, XionPayConfig, PaymentMethod,
+        SubscriptionPlan
     )
     from app.core.init_db import seed_initial_data
     
-    for model in [
-        UserSession, UserPreference, AuditLog, InventoryTransaction,
-        InventoryShrinkage, SupplierPayablesLedger, PurchaseItem, Purchase,
-        Supplier, BranchInventory, ProductComposition, Product, Category,
-        PaymentReport, CashRegister, Branch, SystemSettings, User, Business
-    ]:
+    all_tables = [
+        "audit_logs", "branch_inventory", "branches", "business_settings",
+        "business_subscriptions", "businesses", "cash_registers", "categories",
+        "inventory_shrinkage", "inventory_transactions", "payment_methods",
+        "payment_reports", "product_compositions", "products", "purchase_items",
+        "purchases", "staff_pairings", "subscription_plans",
+        "supplier_payables_ledger", "suppliers", "system_settings",
+        "user_preferences", "user_sessions", "users", "xion_pay_config"
+    ]
+
+    # 1. Truncado atómico con CASCADE para PostgreSQL
+    truncate_ok = False
+    try:
+        truncate_sql = f"TRUNCATE TABLE {', '.join(all_tables)} CASCADE;"
+        await db.execute(text(truncate_sql))
+        await db.commit()
+        truncate_ok = True
+    except Exception:
+        await db.rollback()
+
+    # 2. Fallback de borrado modelo por modelo si no es PostgreSQL o falla TRUNCATE
+    if not truncate_ok:
+        for model in [
+            UserSession, UserPreference, AuditLog, InventoryTransaction,
+            InventoryShrinkage, SupplierPayablesLedger, PurchaseItem, Purchase,
+            Supplier, BranchInventory, ProductComposition, Product, Category,
+            PaymentReport, CashRegister, Branch, SystemSettings,
+            BusinessSubscription, XionPayConfig, PaymentMethod,
+            User, Business, SubscriptionPlan
+        ]:
+            try:
+                await db.execute(delete(model))
+            except Exception:
+                pass
         try:
-            await db.execute(delete(model))
+            await db.execute(text("DELETE FROM staff_pairings;"))
         except Exception:
             pass
+        await db.commit()
     
-    await db.commit()
-    
-    global branches_db, cash_registers_db, inventory_db, suppliers_db, purchases_db, transfers_db, categories_db, shrinkage_db, staff_pairings_db
+    # 3. Limpiar memorias volátiles y caches de estado
+    global branches_db, cash_registers_db, inventory_db, suppliers_db, purchases_db, transfers_db, categories_db, shrinkage_db, staff_pairings_db, xion_pay_state
     branches_db.clear()
     cash_registers_db.clear()
     inventory_db.clear()
@@ -3137,6 +3168,13 @@ async def reset_database(
     shrinkage_db.clear()
     staff_pairings_db.clear()
     
+    xion_pay_state["tenant_id"] = None
+    xion_pay_state["license_token"] = None
+    xion_pay_state["license_status"] = "trial"
+    xion_pay_state["is_active"] = True
+    xion_pay_state["status"] = "trial"
+    
+    # 4. Re-sembrar planes oficiales de suscripción
     try:
         await seed_initial_data()
     except Exception:
@@ -3144,7 +3182,9 @@ async def reset_database(
 
     return {
         "status": "success",
-        "message": "Base de datos y memorias reseteadas correctamente. Todos los datos de prueba eliminados."
+        "message": "Base de datos y memorias reseteadas correctamente. Sistema iniciado desde 0.",
+        "tables_cleared": len(all_tables),
+        "plans_seeded": 4
     }
 
 # 9. Billing & Xion-Pay

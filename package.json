@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "npm --prefix frontend-web run dev",
     "start": "python start-local.py",
-    "build": "npm --prefix frontend-web run build"
+    "build": "npm --prefix frontend-web run build",
+    "db:reset": "python scripts/reset_db.py"
   }
 }
