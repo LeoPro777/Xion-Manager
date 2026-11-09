@@ -41,6 +41,8 @@ from app.models.entities import (
     UserSession as UserSessionModel,
     UserPreference as UserPreferenceModel,
     AuditLog as AuditLogModel,
+    Branch as BranchModel,
+    CashRegister as CashRegisterModel,
     BusinessSubscription
 )
 from app.core.security import create_access_token, decode_access_token, verify_google_id_token, get_password_hash, verify_password
@@ -1173,35 +1175,49 @@ async def complete_onboarding(
         biz = biz_res.scalar_one_or_none()
 
     p_comp = payload.primary_company
+    clean_tax_id = (p_comp.tax_id or "").strip()
+    clean_email = (p_comp.email or user.email or "").strip()
+    clean_legal_name = (p_comp.legal_name or p_comp.trade_name or "Mi Empresa C.A.").strip()
+    clean_trade_name = (p_comp.trade_name or p_comp.legal_name or "Mi Comercio").strip()
+    clean_phone = (p_comp.phone or user.phone or "+58 414 1234567").strip()
+
+    if not biz and clean_tax_id:
+        tax_res = await db.execute(select(BusinessModel).where(BusinessModel.tax_id == clean_tax_id))
+        biz = tax_res.scalar_one_or_none()
+
+    if not biz and clean_email:
+        email_res = await db.execute(select(BusinessModel).where(BusinessModel.email == clean_email))
+        biz = email_res.scalar_one_or_none()
+
     if not biz:
         new_biz_id = f"biz-{uuid.uuid4().hex[:12]}"
         biz = BusinessModel(
             id=new_biz_id,
-            legal_name=p_comp.legal_name,
-            trade_name=p_comp.trade_name,
-            tax_id=p_comp.tax_id,
-            phone=p_comp.phone or user.phone or "+58 414-0000000",
-            email=p_comp.email or user.email,
+            legal_name=clean_legal_name,
+            trade_name=clean_trade_name,
+            tax_id=clean_tax_id or f"J-{uuid.uuid4().hex[:8].upper()}-0",
+            phone=clean_phone,
+            email=clean_email or f"biz-{uuid.uuid4().hex[:6]}@xion.com",
             is_active=True,
             status="active"
         )
         db.add(biz)
         user.business_id = biz.id
     else:
-        biz.legal_name = p_comp.legal_name
-        biz.trade_name = p_comp.trade_name
-        biz.tax_id = p_comp.tax_id
-        if p_comp.phone:
-            biz.phone = p_comp.phone
-        if p_comp.email:
-            biz.email = p_comp.email
+        biz.legal_name = clean_legal_name
+        biz.trade_name = clean_trade_name
+        if clean_tax_id:
+            biz.tax_id = clean_tax_id
+        if clean_phone:
+            biz.phone = clean_phone
+        if clean_email:
+            biz.email = clean_email
         biz.is_active = True
         biz.status = "active"
+        user.business_id = biz.id
         db.add(biz)
 
-    await db.commit()
-    await db.refresh(biz)
-    await db.refresh(user)
+    await db.flush()
 
     # 3. Guardar configuraciones del sistema del tenant específico
     sys_res = await db.execute(select(SystemSettingsModel).where(SystemSettingsModel.business_id == biz.id))
@@ -1231,6 +1247,39 @@ async def complete_onboarding(
         sys_setting.updated_at = datetime.utcnow()
         db.add(sys_setting)
 
+    # 4. Asegurar sucursal por defecto en PostgreSQL (BranchModel) y en memoria (branches_db)
+    branch_res = await db.execute(select(BranchModel).where(BranchModel.business_id == biz.id))
+    db_branch = branch_res.scalars().first()
+    if not db_branch:
+        default_branch_id = f"br-{uuid.uuid4().hex[:8]}"
+        db_branch = BranchModel(
+            id=default_branch_id,
+            business_id=biz.id,
+            name=f"Principal - {biz.trade_name or biz.legal_name}",
+            address=p_comp.address or "Sede Principal",
+            phone=biz.phone or clean_phone,
+            is_active=True
+        )
+        db.add(db_branch)
+        await db.flush()
+
+    user.branch_id = db_branch.id
+    db.add(user)
+
+    # Sincronizar branches_db en memoria
+    if not any(b.get("id") == db_branch.id for b in branches_db):
+        branches_db.append({
+            "id": db_branch.id,
+            "business_id": biz.id,
+            "name": db_branch.name,
+            "code": "SUC-01",
+            "is_main": True,
+            "is_active": True,
+            "phone": db_branch.phone,
+            "address": db_branch.address,
+            "created_at": datetime.utcnow().isoformat()
+        })
+
     # Actualizar sesiones y preferencias con el nuevo business_id
     await db.execute(
         update(UserSessionModel)
@@ -1243,25 +1292,9 @@ async def complete_onboarding(
         .values(business_id=biz.id)
     )
 
-    # Asegurar sucursal por defecto para este negocio
-    existing_branch = next((b for b in branches_db if b.get("business_id") == biz.id), None)
-    if not existing_branch:
-        default_branch_id = f"br-{uuid.uuid4().hex[:8]}"
-        branches_db.append({
-            "id": default_branch_id,
-            "business_id": biz.id,
-            "name": f"Principal - {biz.trade_name or biz.legal_name}",
-            "code": "SUC-01",
-            "is_main": True,
-            "is_active": True,
-            "phone": biz.phone,
-            "address": p_comp.address or "Sede Principal",
-            "created_at": datetime.utcnow().isoformat()
-        })
-        user.branch_id = default_branch_id
-        db.add(user)
-
     await db.commit()
+    await db.refresh(biz)
+    await db.refresh(user)
 
     # Actualizar estado global en memoria
     global_settings["current_exchange_rate_bs"] = float(sys_setting.current_exchange_rate_bs)
@@ -1306,21 +1339,29 @@ async def complete_onboarding(
         except Exception:
             pass
 
-    # 4. Guardar preferencias del usuario si se especificaron
-    if payload.preferences and payload.user_id:
-        pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == payload.user_id))
+    # 5. Guardar preferencias del usuario si se especificaron
+    target_user_id = payload.user_id or user.id
+    if target_user_id:
+        pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == target_user_id))
         pref = pref_res.scalar_one_or_none()
+        pref_theme = "dark"
+        if payload.preferences:
+            pref_theme = payload.preferences.get("theme_mode") or payload.preferences.get("theme") or "dark"
         if not pref:
             pref = UserPreferenceModel(
-                user_id=payload.user_id,
+                user_id=target_user_id,
                 business_id=biz.id,
-                **{k: v for k, v in payload.preferences.items() if hasattr(UserPreferenceModel, k)}
+                theme=pref_theme
             )
             db.add(pref)
         else:
-            for k, v in payload.preferences.items():
-                if hasattr(pref, k):
-                    setattr(pref, k, v)
+            pref.business_id = biz.id
+            if payload.preferences:
+                if "theme_mode" in payload.preferences:
+                    pref.theme = payload.preferences["theme_mode"]
+                for k, v in payload.preferences.items():
+                    if hasattr(UserPreferenceModel, k) and k not in ("id", "user_id"):
+                        setattr(pref, k, v)
             pref.updated_at = datetime.utcnow()
             db.add(pref)
         await db.commit()
