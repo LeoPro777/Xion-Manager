@@ -511,7 +511,7 @@ class UserPreferenceUpdate(BaseModel):
 class UserPreferenceResponse(BaseModel):
     id: str
     user_id: str
-    business_id: str
+    business_id: Optional[str] = None
     theme: str = "dark"
     language: str = "es"
     default_currency: str = "USD"
@@ -524,10 +524,12 @@ class UserPreferenceResponse(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
+    model_config = ConfigDict(extra="ignore")
+
 class UserSessionResponse(BaseModel):
     id: str
     user_id: str
-    business_id: str
+    business_id: Optional[str] = None
     token_jti: str
     terminal_id: Optional[str] = None
     device_info: Optional[str] = None
@@ -538,10 +540,14 @@ class UserSessionResponse(BaseModel):
     created_at: str
     is_current: bool = False
 
+    model_config = ConfigDict(extra="ignore")
+
 class UserMeResponse(BaseModel):
     user: Dict[str, Any]
-    preferences: UserPreferenceResponse
+    preferences: Optional[UserPreferenceResponse] = None
     session: Optional[UserSessionResponse] = None
+
+    model_config = ConfigDict(extra="ignore")
 
 
 

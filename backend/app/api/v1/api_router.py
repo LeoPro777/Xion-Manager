@@ -1422,39 +1422,67 @@ async def get_user_profile(
     pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == user.id))
     pref = pref_res.scalar_one_or_none()
     if not pref:
-        pref = UserPreferenceModel(
-            user_id=user.id,
-            business_id=user.business_id,
-            theme="dark",
-            language="es",
-            default_currency="USD",
-            sound_enabled=True,
-            table_rows_per_page=25,
-            compact_mode=False,
-            notifications={"push": True, "email": True, "inventory_alerts": True},
-            pos_quick_keys={"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
-            ui_preferences={"sidebar_collapsed": False}
-        )
-        db.add(pref)
-        await db.commit()
-        await db.refresh(pref)
+        try:
+            pref = UserPreferenceModel(
+                user_id=user.id,
+                business_id=user.business_id,
+                theme="dark",
+                language="es",
+                default_currency="USD",
+                sound_enabled=True,
+                table_rows_per_page=25,
+                compact_mode=False,
+                notifications={"push": True, "email": True, "inventory_alerts": True},
+                pos_quick_keys={"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
+                ui_preferences={"sidebar_collapsed": False}
+            )
+            db.add(pref)
+            await db.commit()
+            await db.refresh(pref)
+        except Exception:
+            await db.rollback()
 
     session_data = None
     if session:
-        session_data = UserSessionResponse(
-            id=session.id,
-            user_id=session.user_id,
-            business_id=session.business_id,
-            token_jti=session.token_jti,
-            terminal_id=session.terminal_id,
-            device_info=session.device_info,
-            ip_address=session.ip_address,
-            is_active=session.is_active,
-            expires_at=session.expires_at.isoformat(),
-            last_activity_at=session.last_activity_at.isoformat() if session.last_activity_at else None,
-            created_at=session.created_at.isoformat(),
-            is_current=True
-        )
+        try:
+            session_data = UserSessionResponse(
+                id=session.id,
+                user_id=session.user_id,
+                business_id=session.business_id,
+                token_jti=session.token_jti,
+                terminal_id=session.terminal_id,
+                device_info=session.device_info,
+                ip_address=session.ip_address,
+                is_active=session.is_active,
+                expires_at=session.expires_at.isoformat() if session.expires_at else "",
+                last_activity_at=session.last_activity_at.isoformat() if session.last_activity_at else None,
+                created_at=session.created_at.isoformat() if session.created_at else "",
+                is_current=True
+            )
+        except Exception:
+            session_data = None
+
+    try:
+        onboarding_completed = await _check_user_onboarding_completed(user, db)
+    except Exception:
+        onboarding_completed = bool(user.business_id)
+
+    pref_dict = {
+        "id": getattr(pref, "id", f"pref-{user.id}"),
+        "user_id": user.id,
+        "business_id": getattr(pref, "business_id", user.business_id),
+        "theme": getattr(pref, "theme", "dark"),
+        "language": getattr(pref, "language", "es"),
+        "default_currency": getattr(pref, "default_currency", "USD"),
+        "sound_enabled": getattr(pref, "sound_enabled", True),
+        "table_rows_per_page": getattr(pref, "table_rows_per_page", 25),
+        "compact_mode": getattr(pref, "compact_mode", False),
+        "notifications": getattr(pref, "notifications", None) or {},
+        "pos_quick_keys": getattr(pref, "pos_quick_keys", None) or {},
+        "ui_preferences": getattr(pref, "ui_preferences", None) or {},
+        "created_at": pref.created_at.isoformat() if getattr(pref, "created_at", None) else None,
+        "updated_at": pref.updated_at.isoformat() if getattr(pref, "updated_at", None) else None
+    }
 
     return {
         "user": {
@@ -1468,26 +1496,11 @@ async def get_user_profile(
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
-            "onboarding_completed": await _check_user_onboarding_completed(user, db),
+            "onboarding_completed": onboarding_completed,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
         },
-        "preferences": {
-            "id": pref.id,
-            "user_id": pref.user_id,
-            "business_id": pref.business_id,
-            "theme": pref.theme,
-            "language": pref.language,
-            "default_currency": pref.default_currency,
-            "sound_enabled": pref.sound_enabled,
-            "table_rows_per_page": pref.table_rows_per_page,
-            "compact_mode": pref.compact_mode,
-            "notifications": pref.notifications or {},
-            "pos_quick_keys": pref.pos_quick_keys or {},
-            "ui_preferences": pref.ui_preferences or {},
-            "created_at": pref.created_at.isoformat() if pref.created_at else None,
-            "updated_at": pref.updated_at.isoformat() if pref.updated_at else None
-        },
+        "preferences": pref_dict,
         "session": session_data
     }
 
@@ -1504,39 +1517,42 @@ async def get_my_preferences(
     pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == user.id))
     pref = pref_res.scalar_one_or_none()
     if not pref:
-        pref = UserPreferenceModel(
-            user_id=user.id,
-            business_id=user.business_id,
-            theme="dark",
-            language="es",
-            default_currency="USD",
-            sound_enabled=True,
-            table_rows_per_page=25,
-            compact_mode=False,
-            notifications={"push": True, "email": True, "inventory_alerts": True},
-            pos_quick_keys={"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
-            ui_preferences={"sidebar_collapsed": False}
-        )
-        db.add(pref)
-        await db.commit()
-        await db.refresh(pref)
+        try:
+            pref = UserPreferenceModel(
+                user_id=user.id,
+                business_id=user.business_id,
+                theme="dark",
+                language="es",
+                default_currency="USD",
+                sound_enabled=True,
+                table_rows_per_page=25,
+                compact_mode=False,
+                notifications={"push": True, "email": True, "inventory_alerts": True},
+                pos_quick_keys={"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
+                ui_preferences={"sidebar_collapsed": False}
+            )
+            db.add(pref)
+            await db.commit()
+            await db.refresh(pref)
+        except Exception:
+            await db.rollback()
 
-    return {
-        "id": pref.id,
-        "user_id": pref.user_id,
-        "business_id": pref.business_id,
-        "theme": pref.theme,
-        "language": pref.language,
-        "default_currency": pref.default_currency,
-        "sound_enabled": pref.sound_enabled,
-        "table_rows_per_page": pref.table_rows_per_page,
-        "compact_mode": pref.compact_mode,
-        "notifications": pref.notifications or {},
-        "pos_quick_keys": pref.pos_quick_keys or {},
-        "ui_preferences": pref.ui_preferences or {},
-        "created_at": pref.created_at.isoformat() if pref.created_at else None,
-        "updated_at": pref.updated_at.isoformat() if pref.updated_at else None
-    }
+    return UserPreferenceResponse(
+        id=getattr(pref, "id", f"pref-{user.id}"),
+        user_id=user.id,
+        business_id=getattr(pref, "business_id", user.business_id),
+        theme=getattr(pref, "theme", "dark"),
+        language=getattr(pref, "language", "es"),
+        default_currency=getattr(pref, "default_currency", "USD"),
+        sound_enabled=getattr(pref, "sound_enabled", True),
+        table_rows_per_page=getattr(pref, "table_rows_per_page", 25),
+        compact_mode=getattr(pref, "compact_mode", False),
+        notifications=getattr(pref, "notifications", None) or {},
+        pos_quick_keys=getattr(pref, "pos_quick_keys", None) or {},
+        ui_preferences=getattr(pref, "ui_preferences", None) or {},
+        created_at=pref.created_at.isoformat() if getattr(pref, "created_at", None) else None,
+        updated_at=pref.updated_at.isoformat() if getattr(pref, "updated_at", None) else None
+    )
 
 
 @api_router.put("/users/me/preferences", response_model=UserPreferenceResponse)
