@@ -962,10 +962,18 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
 
     jwt_token, session, pref = await _create_user_session_and_get_prefs(user, request, db)
 
+    # En Google OAuth: Solo es nuevo si no existía previamente en la base de datos
+    onboarding_completed = False if is_new_user else True
+    if is_new_user:
+        onboarding_completed = await _check_user_onboarding_completed(user, db)
+    elif not user.business_id and user.approval_status != "APPROVED":
+        onboarding_completed = False
+
     return {
         "access_token": jwt_token,
         "token_type": "bearer",
         "session_id": session.id,
+        "is_new_user": is_new_user,
         "user": {
             "id": user.id,
             "email": user.email,
@@ -977,7 +985,8 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
-            "onboarding_completed": await _check_user_onboarding_completed(user, db),
+            "is_new_user": is_new_user,
+            "onboarding_completed": onboarding_completed,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
         },
@@ -1053,10 +1062,16 @@ async def login_standard(payload: StandardLoginRequest, request: Request, db: As
 
     jwt_token, session, pref = await _create_user_session_and_get_prefs(user, request, db)
 
+    # En login estándar el usuario ya existe en la base de datos (no es nuevo)
+    is_new_user = False
+    has_biz = bool(user.business_id)
+    onboarding_completed = True if has_biz else await _check_user_onboarding_completed(user, db)
+
     return {
         "access_token": jwt_token,
         "token_type": "bearer",
         "session_id": session.id,
+        "is_new_user": is_new_user,
         "user": {
             "id": user.id,
             "email": user.email,
@@ -1068,7 +1083,8 @@ async def login_standard(payload: StandardLoginRequest, request: Request, db: As
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
-            "onboarding_completed": await _check_user_onboarding_completed(user, db),
+            "is_new_user": is_new_user,
+            "onboarding_completed": onboarding_completed,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
         },
@@ -1124,6 +1140,7 @@ async def register_user(payload: RegisterUserRequest, request: Request, db: Asyn
         "access_token": jwt_token,
         "token_type": "bearer",
         "session_id": session.id,
+        "is_new_user": True,
         "user": {
             "id": user.id,
             "email": user.email,
@@ -1136,6 +1153,7 @@ async def register_user(payload: RegisterUserRequest, request: Request, db: Asyn
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
+            "is_new_user": True,
             "onboarding_completed": False,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
@@ -1551,10 +1569,15 @@ async def get_user_profile(
         except Exception:
             pass
 
+    # Si el usuario ya existe en la base de datos y tiene empresa o fue configurado, no es un usuario nuevo
+    has_business = bool(user.business_id)
     try:
-        onboarding_completed = await _check_user_onboarding_completed(user, db)
+        db_onboarding_done = await _check_user_onboarding_completed(user, db)
     except Exception:
-        onboarding_completed = bool(user.business_id)
+        db_onboarding_done = has_business
+
+    is_new = not has_business and user.role == "OWNER" and not db_onboarding_done
+    onboarding_completed = not is_new
 
     pref_dict = {
         "id": getattr(pref, "id", f"pref-{user.id}"),
@@ -1586,6 +1609,7 @@ async def get_user_profile(
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
+            "is_new_user": is_new,
             "onboarding_completed": onboarding_completed,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None

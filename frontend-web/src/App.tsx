@@ -135,10 +135,18 @@ export const App: React.FC = () => {
     );
   }
 
-  const needsOnboarding = (
-    currentUser.onboarding_completed === false ||
-    localStorage.getItem(`xion_onboarding_completed_${currentUser.id}`) !== 'true'
-  );
+  useEffect(() => {
+    if (currentUser?.id && (currentUser.business_id || currentUser.onboarding_completed === true || currentUser.is_new_user === false)) {
+      localStorage.setItem(`xion_onboarding_completed_${currentUser.id}`, 'true');
+    }
+  }, [currentUser]);
+
+  // Validación estricta: El formulario de onboarding inicial ÚNICAMENTE se muestra si el usuario es nuevo
+  // (es decir, no existía previamente en la base de datos con empresa o registro previo completado).
+  const isExistingUserInDb = Boolean(currentUser.business_id) || currentUser.is_new_user === false || currentUser.onboarding_completed === true;
+  const isLocallyCompleted = localStorage.getItem(`xion_onboarding_completed_${currentUser.id}`) === 'true';
+
+  const needsOnboarding = !isExistingUserInDb && !isLocallyCompleted && (currentUser.is_new_user === true || currentUser.onboarding_completed === false);
 
   const renderContent = () => {
     switch (activeTab) {

@@ -368,7 +368,7 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
                     <button
                       onClick={() => {
                         localStorage.removeItem(`xion_onboarding_completed_${currentUser.id}`);
-                        setCurrentUser({ ...currentUser, onboarding_completed: false });
+                        setCurrentUser({ ...currentUser, onboarding_completed: false, is_new_user: true });
                         setShowUserMenu(false);
                       }}
                       className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium text-cyan-300 hover:bg-cyan-950/40 flex items-center gap-2.5 transition-colors"

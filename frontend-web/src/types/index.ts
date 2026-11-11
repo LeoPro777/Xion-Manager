@@ -29,6 +29,7 @@ export interface User {
   is_active: boolean;
   avatar_url?: string;
   last_login_at?: string;
+  is_new_user?: boolean;
   onboarding_completed?: boolean;
   created_at?: string;
 }
