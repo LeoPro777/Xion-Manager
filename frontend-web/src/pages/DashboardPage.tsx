@@ -12,13 +12,24 @@ export const DashboardPage: React.FC = () => {
   const [showMapModal, setShowMapModal] = useState(false);
 
   useEffect(() => {
-    api.getDashboardMetrics().then(setMetrics);
+    api.getDashboardMetrics(selectedBranch).then(setMetrics);
+  }, [selectedBranch]);
+
+  useEffect(() => {
     api.getBranches().then(setBranches);
     api.getCashRegisters().then(setCashRegisters);
   }, []);
 
+  const displayedBranches = selectedBranch === 'all'
+    ? branches
+    : branches.filter(b => b.id === selectedBranch);
+
+  const displayedRegisters = selectedBranch === 'all'
+    ? cashRegisters
+    : cashRegisters.filter(r => r.branch_id === selectedBranch);
+
   const allMarkers: MapMarkerItem[] = [
-    ...branches.map(b => ({
+    ...displayedBranches.map(b => ({
       id: b.id,
       name: b.name,
       lat: b.latitude || 10.6417,
@@ -27,7 +38,7 @@ export const DashboardPage: React.FC = () => {
       subtitle: b.address,
       status: b.is_active ? 'Activa' : 'Inactiva'
     })),
-    ...cashRegisters.map(r => ({
+    ...displayedRegisters.map(r => ({
       id: r.id,
       name: r.name,
       lat: r.latitude || (branches.find(b => b.id === r.branch_id)?.latitude || 10.6417),

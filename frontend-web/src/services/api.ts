@@ -650,9 +650,12 @@ export const api = {
   },
 
   // 1. Dashboard
-  async getDashboardMetrics(): Promise<DashboardMetrics> {
+  async getDashboardMetrics(branchId?: string): Promise<DashboardMetrics> {
     try {
-      const res = await fetch('/api/v1/dashboard/metrics', {
+      const url = branchId && branchId !== 'all'
+        ? `/api/v1/dashboard/metrics?branch_id=${encodeURIComponent(branchId)}`
+        : '/api/v1/dashboard/metrics';
+      const res = await fetch(url, {
         headers: authHeaders()
       });
       if (res.ok) {

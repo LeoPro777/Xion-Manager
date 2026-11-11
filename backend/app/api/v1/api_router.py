@@ -897,6 +897,21 @@ async def get_optional_current_user(
         return None
 
 
+async def _get_branch_name(branch_id: Optional[str], db: AsyncSession) -> str:
+    """Resuelve de forma consistente el nombre de la sucursal asignada o retorna Acceso Global."""
+    if not branch_id or str(branch_id).lower() in ("all", "global", "none"):
+        return "Acceso Global (Todas)"
+    try:
+        res = await db.execute(select(BranchModel.name).where(BranchModel.id == branch_id))
+        name = res.scalar_one_or_none()
+        if name:
+            return name
+    except Exception:
+        pass
+    b_mem = next((b["name"] for b in branches_db if b.get("id") == branch_id), None)
+    return b_mem or "Acceso Global (Todas)"
+
+
 @api_router.post("/auth/google", response_model=AuthTokenResponse)
 async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """
@@ -958,6 +973,7 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
             "role": user.role,
             "business_id": user.business_id,
             "branch_id": user.branch_id,
+            "branch_name": await _get_branch_name(user.branch_id, db),
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
@@ -1048,6 +1064,7 @@ async def login_standard(payload: StandardLoginRequest, request: Request, db: As
             "role": user.role,
             "business_id": user.business_id,
             "branch_id": user.branch_id,
+            "branch_name": await _get_branch_name(user.branch_id, db),
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
@@ -1114,6 +1131,8 @@ async def register_user(payload: RegisterUserRequest, request: Request, db: Asyn
             "phone": user.phone,
             "role": user.role,
             "business_id": user.business_id,
+            "branch_id": user.branch_id,
+            "branch_name": await _get_branch_name(user.branch_id, db),
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
@@ -1397,6 +1416,7 @@ async def complete_onboarding(
             "role": user.role,
             "business_id": user.business_id,
             "branch_id": user.branch_id,
+            "branch_name": db_branch.name if db_branch else "Acceso Global (Todas)",
             "approval_status": user.approval_status,
             "onboarding_completed": True
         },
@@ -1534,6 +1554,7 @@ async def get_user_profile(
             "role": user.role,
             "business_id": user.business_id,
             "branch_id": user.branch_id,
+            "branch_name": await _get_branch_name(user.branch_id, db),
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
@@ -1787,8 +1808,10 @@ async def list_branches(
             })
 
     recalculate_branch_cash_registers()
-    if current_user and current_user.business_id:
-        return [b for b in branches_db if b.get("business_id") == current_user.business_id]
+    if current_user:
+        if current_user.business_id:
+            return [b for b in branches_db if b.get("business_id") == current_user.business_id]
+        return []
     return branches_db
 
 @api_router.get("/branches/{branch_id}")
@@ -2451,12 +2474,7 @@ async def list_users(
     users = result.scalars().all()
     out = []
     for u in users:
-        branch_name = "Acceso Global (Todas)"
-        if u.branch_id:
-            for b in branches_db:
-                if b["id"] == u.branch_id:
-                    branch_name = b["name"]
-                    break
+        branch_name = await _get_branch_name(u.branch_id, db)
         out.append({
             "id": u.id,
             "email": u.email,
@@ -2501,7 +2519,11 @@ async def update_user(
         user.role = payload["role"]
     if "branch_id" in payload:
         b_id = payload["branch_id"]
-        user.branch_id = b_id if b_id and b_id not in ("all", "global", "none") else None
+        if b_id and str(b_id).lower() not in ("all", "global", "none"):
+            b_chk = await db.execute(select(BranchModel.id).where(BranchModel.id == b_id))
+            user.branch_id = b_chk.scalar_one_or_none()
+        else:
+            user.branch_id = None
     if "is_active" in payload:
         user.is_active = bool(payload["is_active"])
     if "approval_status" in payload and payload["approval_status"]:
@@ -2529,12 +2551,7 @@ async def update_user(
     await db.commit()
     await db.refresh(user)
 
-    branch_name = "Acceso Global (Todas)"
-    if user.branch_id:
-        for b in branches_db:
-            if b["id"] == user.branch_id:
-                branch_name = b["name"]
-                break
+    branch_name = await _get_branch_name(user.branch_id, db)
 
     return {
         "id": user.id,
@@ -2559,6 +2576,12 @@ async def user_approval(
     verify_system_operational()
     current_user = await get_optional_current_user(authorization, db)
     owner_biz_id = (current_user.business_id if current_user else None) or payload.get("business_id")
+    if not owner_biz_id and current_user:
+        b_res = await db.execute(select(BusinessModel).where(BusinessModel.email == current_user.email))
+        b_obj = b_res.scalar_one_or_none()
+        if b_obj:
+            owner_biz_id = b_obj.id
+
     user_id = payload.get("user_id")
     status_val = payload.get("status") or payload.get("status_val", "APPROVED")
     user_res = await db.execute(select(UserModel).where(UserModel.id == user_id))
@@ -2569,6 +2592,10 @@ async def user_approval(
             user.is_active = True
             if owner_biz_id:
                 user.business_id = owner_biz_id
+            if user.branch_id:
+                b_chk = await db.execute(select(BranchModel.id).where(BranchModel.id == user.branch_id))
+                if not b_chk.scalar_one_or_none():
+                    user.branch_id = None
         elif status_val == "REJECTED":
             user.is_active = False
         user.updated_at = datetime.utcnow()
@@ -2585,6 +2612,7 @@ async def user_approval(
                 .values(business_id=user.business_id)
             )
         await db.commit()
+        await db.refresh(user)
     return {
         "user_id": user_id,
         "approval_status": status_val,
@@ -2684,20 +2712,6 @@ async def select_collaborator_role(
         current_user.full_name = str(payload.get("full_name")).strip()
     if payload.get("phone"):
         current_user.phone = str(payload.get("phone")).strip()
-
-    # Desvincular negocio provisional si existe
-    old_biz_id = current_user.business_id
-    if old_biz_id:
-        biz_res = await db.execute(select(BusinessModel).where(BusinessModel.id == old_biz_id))
-        biz = biz_res.scalar_one_or_none()
-        if biz and (not biz.tax_id or str(biz.tax_id).startswith("TMP-") or str(biz.tax_id).startswith("J-TMP-")):
-            current_user.business_id = None
-            try:
-                from sqlalchemy import delete
-                await db.execute(delete(SystemSettingsModel).where(SystemSettingsModel.business_id == old_biz_id))
-                await db.execute(delete(BusinessModel).where(BusinessModel.id == old_biz_id))
-            except Exception:
-                pass
 
     current_user.business_id = None
     current_user.branch_id = None
@@ -2826,52 +2840,99 @@ async def get_staff_pairing_status(
 ):
     """
     Consulta el estado de aprobación del código de vinculación de personal (6 dígitos numéricos).
-    Valida vigencia temporal (15 minutos) y normaliza formato.
+    Valida vigencia temporal (15 minutos) y sincroniza desde PostgreSQL y memoria.
     """
     code = (pairing_code or "").strip().upper().replace("XM-", "").replace("XM", "")
 
-    for s in staff_pairings_db:
-        if s["pairing_code"] == code or s["pairing_code"] == f"XM-{code}":
-            if s.get("status") == "REJECTED":
-                return {
-                    "status": "REJECTED",
-                    "pairing_code": code,
-                    "message": "La solicitud de vinculación fue rechazada por el administrador."
+    req_item = next((s for s in staff_pairings_db if s["pairing_code"] == code or s["pairing_code"] == f"XM-{code}"), None)
+
+    # Sincronizar desde PostgreSQL si no está en memoria o sigue PENDING
+    if not req_item or req_item.get("status") == "PENDING":
+        try:
+            from sqlalchemy import text
+            p_res = await db.execute(
+                text("SELECT pairing_code, user_id, email, full_name, role, branch_id, branch_name, business_id, status, expires_at FROM staff_pairings WHERE pairing_code = :code OR pairing_code = :xm_code"),
+                {"code": code, "xm_code": f"XM-{code}"}
+            )
+            p_row = p_res.fetchone()
+            if p_row:
+                db_data = {
+                    "pairing_code": p_row[0],
+                    "user_id": p_row[1],
+                    "email": p_row[2],
+                    "full_name": p_row[3],
+                    "role": p_row[4],
+                    "branch_id": p_row[5],
+                    "branch_name": p_row[6],
+                    "business_id": p_row[7],
+                    "status": p_row[8],
+                    "expires_at": p_row[9].isoformat() if p_row[9] else None
                 }
-            exp_str = s.get("expires_at")
-            if exp_str and s.get("status") == "PENDING":
-                try:
-                    exp_dt = datetime.fromisoformat(exp_str)
-                    if exp_dt < datetime.utcnow():
-                        s["status"] = "EXPIRED"
-                        return {
-                            "status": "EXPIRED",
-                            "pairing_code": code,
-                            "message": "El código de vinculación ha expirado. Por favor genera uno nuevo."
-                        }
-                except Exception:
-                    pass
+                if not req_item:
+                    staff_pairings_db.append(db_data)
+                    req_item = db_data
+                else:
+                    req_item.update(db_data)
+        except Exception:
+            pass
 
-            if s.get("status") == "APPROVED":
-                biz_id = s.get("business_id")
-                uid = s.get("user_id")
-                if uid and biz_id:
-                    try:
-                        u_res = await db.execute(select(UserModel).where(UserModel.id == uid))
-                        u = u_res.scalar_one_or_none()
-                        if u and u.business_id != biz_id:
-                            u.business_id = biz_id
-                            u.role = s.get("role", u.role)
-                            u.branch_id = s.get("branch_id", u.branch_id)
-                            u.approval_status = "APPROVED"
-                            u.is_active = True
-                            await db.commit()
-                    except Exception:
-                        pass
-                return s
+    if not req_item:
+        return {"status": "PENDING", "pairing_code": code}
 
-            return s
-    return {"status": "PENDING", "pairing_code": code}
+    if req_item.get("status") == "REJECTED":
+        return {
+            "status": "REJECTED",
+            "pairing_code": code,
+            "message": "La solicitud de vinculación fue rechazada por el administrador."
+        }
+
+    exp_str = req_item.get("expires_at")
+    if exp_str and req_item.get("status") == "PENDING":
+        try:
+            exp_dt = datetime.fromisoformat(exp_str)
+            if exp_dt < datetime.utcnow():
+                req_item["status"] = "EXPIRED"
+                return {
+                    "status": "EXPIRED",
+                    "pairing_code": code,
+                    "message": "El código de vinculación ha expirado. Por favor genera uno nuevo."
+                }
+        except Exception:
+            pass
+
+    if req_item.get("status") == "APPROVED":
+        biz_id = req_item.get("business_id")
+        uid = req_item.get("user_id")
+        if uid and biz_id:
+            try:
+                u_res = await db.execute(select(UserModel).where(UserModel.id == uid))
+                u = u_res.scalar_one_or_none()
+                if u and (u.business_id != biz_id or u.approval_status != "APPROVED"):
+                    u.business_id = biz_id
+                    u.role = req_item.get("role") or u.role
+                    if req_item.get("branch_id"):
+                        b_chk = await db.execute(select(BranchModel.id).where(BranchModel.id == req_item["branch_id"]))
+                        u.branch_id = b_chk.scalar_one_or_none()
+                    u.approval_status = "APPROVED"
+                    u.is_active = True
+                    u.updated_at = datetime.utcnow()
+                    db.add(u)
+                    await db.execute(
+                        update(UserSessionModel)
+                        .where(UserSessionModel.user_id == u.id)
+                        .values(business_id=biz_id)
+                    )
+                    await db.execute(
+                        update(UserPreferenceModel)
+                        .where(UserPreferenceModel.user_id == u.id)
+                        .values(business_id=biz_id)
+                    )
+                    await db.commit()
+            except Exception:
+                pass
+        return req_item
+
+    return req_item
 
 @api_router.post("/staff/confirm-pairing")
 async def confirm_staff_pairing(
@@ -2977,7 +3038,11 @@ async def confirm_staff_pairing(
                 if user:
                     if assigned_biz_id:
                         user.business_id = assigned_biz_id
-                    user.branch_id = assigned_branch
+                    valid_branch_id = None
+                    if assigned_branch and str(assigned_branch).lower() not in ("all", "global", "none"):
+                        b_chk = await db.execute(select(BranchModel.id).where(BranchModel.id == assigned_branch))
+                        valid_branch_id = b_chk.scalar_one_or_none()
+                    user.branch_id = valid_branch_id
                     user.role = assigned_role
                     user.approval_status = "APPROVED"
                     user.is_active = True
@@ -3080,10 +3145,10 @@ async def approve_staff_request(
     # 1. Determinar el business_id del Dueño con máxima prioridad
     owner_biz_id = payload.get("business_id") or (current_user.business_id if current_user else None)
     if not owner_biz_id and current_user:
-        biz_check = await db.execute(select(BusinessModel).where(BusinessModel.id == current_user.business_id))
-        biz_found = biz_check.scalar_one_or_none()
-        if biz_found:
-            owner_biz_id = biz_found.id
+        b_res = await db.execute(select(BusinessModel).where(BusinessModel.email == current_user.email))
+        b_obj = b_res.scalar_one_or_none()
+        if b_obj:
+            owner_biz_id = b_obj.id
 
     if not owner_biz_id:
         biz_def = await db.execute(
@@ -3115,20 +3180,25 @@ async def approve_staff_request(
 
     branch_id = payload.get("branch_id")
     role = payload.get("role") or "CASHIER"
-    branch_name = "Acceso Global (Todas)"
-    if branch_id and branch_id not in ("all", "global"):
-        for b in branches_db:
-            if b["id"] == branch_id:
-                branch_name = b["name"]
-                break
-    else:
-        branch_id = None
+    valid_branch_id = None
+    if branch_id and str(branch_id).lower() not in ("all", "global", "none"):
+        b_chk = await db.execute(
+            select(BranchModel.id).where(BranchModel.id == branch_id, BranchModel.business_id == owner_biz_id)
+        )
+        valid_branch_id = b_chk.scalar_one_or_none()
+        if not valid_branch_id:
+            fb_chk = await db.execute(
+                select(BranchModel.id).where(BranchModel.business_id == owner_biz_id).limit(1)
+            )
+            valid_branch_id = fb_chk.scalar_one_or_none()
+
+    branch_name = await _get_branch_name(valid_branch_id, db)
 
     target_req = None
     for s in staff_pairings_db:
         if s["pairing_code"] == code or s["pairing_code"] == f"XM-{code}":
             s["status"] = "APPROVED"
-            s["branch_id"] = branch_id
+            s["branch_id"] = valid_branch_id
             s["branch_name"] = branch_name
             s["role"] = role
             if owner_biz_id:
@@ -3139,7 +3209,10 @@ async def approve_staff_request(
     if not target_req:
         try:
             from sqlalchemy import text
-            p_res = await db.execute(text("SELECT pairing_code, user_id, email, full_name, phone FROM staff_pairings WHERE pairing_code = :code"), {"code": code})
+            p_res = await db.execute(
+                text("SELECT pairing_code, user_id, email, full_name, phone FROM staff_pairings WHERE pairing_code = :code OR pairing_code = :xm_code"),
+                {"code": code, "xm_code": f"XM-{code}"}
+            )
             p_row = p_res.fetchone()
             if p_row:
                 target_req = {
@@ -3149,7 +3222,7 @@ async def approve_staff_request(
                     "full_name": p_row[3],
                     "phone": p_row[4],
                     "status": "APPROVED",
-                    "branch_id": branch_id,
+                    "branch_id": valid_branch_id,
                     "branch_name": branch_name,
                     "role": role,
                     "business_id": owner_biz_id
@@ -3177,39 +3250,27 @@ async def approve_staff_request(
             if uid:
                 cond.append(UserModel.id == uid)
             if email:
-                cond.append(UserModel.email == email)
+                cond.append(UserModel.email.ilike(str(email).strip()))
             user_res = await db.execute(select(UserModel).where(or_(*cond)))
             user = user_res.scalar_one_or_none()
             if user:
-                # Si el usuario tenía un negocio provisional previo propio, purgarlo
-                old_biz = user.business_id
-                if old_biz and old_biz != owner_biz_id:
-                    try:
-                        from sqlalchemy import delete
-                        await db.execute(delete(SystemSettingsModel).where(SystemSettingsModel.business_id == old_biz))
-                        await db.execute(delete(BusinessModel).where(BusinessModel.id == old_biz))
-                    except Exception:
-                        pass
-
-                if owner_biz_id:
-                    user.business_id = owner_biz_id
-                    await db.execute(
-                        update(UserSessionModel)
-                        .where(UserSessionModel.user_id == user.id)
-                        .values(business_id=owner_biz_id)
-                    )
-                    await db.execute(
-                        update(UserPreferenceModel)
-                        .where(UserPreferenceModel.user_id == user.id)
-                        .values(business_id=owner_biz_id)
-                    )
-
-                user.branch_id = branch_id
+                user.business_id = owner_biz_id
+                user.branch_id = valid_branch_id
                 user.role = role
                 user.approval_status = "APPROVED"
                 user.is_active = True
                 user.updated_at = datetime.utcnow()
                 db.add(user)
+                await db.execute(
+                    update(UserSessionModel)
+                    .where(UserSessionModel.user_id == user.id)
+                    .values(business_id=owner_biz_id)
+                )
+                await db.execute(
+                    update(UserPreferenceModel)
+                    .where(UserPreferenceModel.user_id == user.id)
+                    .values(business_id=owner_biz_id)
+                )
                 await db.commit()
                 await db.refresh(user)
 
@@ -3219,13 +3280,14 @@ async def approve_staff_request(
                 await db.execute(text("""
                     UPDATE staff_pairings 
                     SET status = 'APPROVED', business_id = :biz_id, role = :role, branch_id = :branch_id, branch_name = :branch_name
-                    WHERE pairing_code = :code
+                    WHERE pairing_code = :code OR pairing_code = :xm_code
                 """), {
                     "biz_id": owner_biz_id,
                     "role": role,
-                    "branch_id": branch_id,
+                    "branch_id": valid_branch_id,
                     "branch_name": branch_name,
-                    "code": code
+                    "code": code,
+                    "xm_code": f"XM-{code}"
                 })
                 await db.commit()
             except Exception:
