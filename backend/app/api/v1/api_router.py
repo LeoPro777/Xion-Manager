@@ -31,7 +31,7 @@ from app.services.image_service import (
 )
 from app.services.storage_service import storage_service
 from app.services.xion_pay_service import XionPayService
-from sqlalchemy import select, update, or_
+from sqlalchemy import select, update, or_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.entities import (
@@ -1764,18 +1764,57 @@ async def list_branches(
     db: AsyncSession = Depends(get_db)
 ):
     verify_system_operational()
-    recalculate_branch_cash_registers()
     current_user = await get_optional_current_user(authorization, db)
+
+    # Sincronizar sucursales persistidas desde PostgreSQL
+    db_res = await db.execute(select(BranchModel))
+    for db_b in db_res.scalars().all():
+        existing = next((b for b in branches_db if b["id"] == db_b.id), None)
+        if not existing:
+            branches_db.append({
+                "id": db_b.id,
+                "business_id": db_b.business_id,
+                "name": db_b.name,
+                "address": db_b.address,
+                "latitude": db_b.latitude or 10.6417,
+                "longitude": db_b.longitude or -71.6125,
+                "phone": db_b.phone or "+58 414-0000000",
+                "manager_user_id": db_b.manager_user_id,
+                "manager_name": "Gerente General",
+                "active_cash_registers_count": 0,
+                "is_active": db_b.is_active,
+                "created_at": db_b.created_at or datetime.utcnow()
+            })
+
+    recalculate_branch_cash_registers()
     if current_user and current_user.business_id:
         return [b for b in branches_db if b.get("business_id") == current_user.business_id]
     return branches_db
 
 @api_router.get("/branches/{branch_id}")
-async def get_branch(branch_id: str):
+async def get_branch(
+    branch_id: str,
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
     for b in branches_db:
         if b["id"] == branch_id:
             return b
+    db_res = await db.execute(select(BranchModel).where(BranchModel.id == branch_id))
+    db_b = db_res.scalar_one_or_none()
+    if db_b:
+        return {
+            "id": db_b.id,
+            "business_id": db_b.business_id,
+            "name": db_b.name,
+            "address": db_b.address,
+            "latitude": db_b.latitude,
+            "longitude": db_b.longitude,
+            "phone": db_b.phone,
+            "manager_user_id": db_b.manager_user_id,
+            "is_active": db_b.is_active,
+            "created_at": db_b.created_at
+        }
     return {"message": "Sucursal no encontrada"}
 
 @api_router.post("/branches", response_model=BranchResponse, status_code=status.HTTP_201_CREATED)
@@ -1786,7 +1825,7 @@ async def create_branch(
 ):
     verify_system_operational()
     current_user = await get_optional_current_user(authorization, db)
-    biz_id = current_user.business_id if current_user else "biz-101"
+    biz_id = current_user.business_id if current_user and current_user.business_id else "biz-101"
 
     max_branches = xion_pay_state.get("limits", {}).get("max_branches", 2)
     active_branches = [b for b in branches_db if b.get("business_id") == biz_id and b.get("is_active", True)]
@@ -1796,8 +1835,9 @@ async def create_branch(
             detail=f"Límite de sucursales alcanzado ({len(active_branches)}/{max_branches}). Actualice su plan en Xion-Pay para añadir más."
         )
 
+    branch_id = f"branch-{int(datetime.utcnow().timestamp())}"
     new_b = {
-        "id": f"branch-{int(datetime.utcnow().timestamp())}",
+        "id": branch_id,
         "business_id": biz_id,
         "name": payload.name,
         "address": payload.address,
@@ -1810,12 +1850,42 @@ async def create_branch(
         "is_active": True,
         "created_at": datetime.utcnow()
     }
+
+    # Persistir en base de datos PostgreSQL
+    db_branch = BranchModel(
+        id=branch_id,
+        business_id=biz_id,
+        name=payload.name,
+        address=payload.address,
+        latitude=payload.latitude or 10.6417,
+        longitude=payload.longitude or -71.6125,
+        phone=payload.phone or "+58 414-0000000",
+        manager_user_id=payload.manager_user_id,
+        is_active=True
+    )
+    db.add(db_branch)
+    await db.commit()
+
     branches_db.append(new_b)
     return new_b
 
 @api_router.put("/branches/{branch_id}")
-async def update_branch(branch_id: str, payload: BranchUpdate):
+async def update_branch(
+    branch_id: str,
+    payload: BranchUpdate,
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    # Actualizar en PostgreSQL
+    db_res = await db.execute(select(BranchModel).where(BranchModel.id == branch_id))
+    db_b = db_res.scalar_one_or_none()
+    if db_b:
+        for k, v in payload.model_dump(exclude_unset=True).items():
+            if hasattr(db_b, k):
+                setattr(db_b, k, v)
+        db_b.updated_at = datetime.utcnow()
+        await db.commit()
+
     for i, b in enumerate(branches_db):
         if b["id"] == branch_id:
             branches_db[i].update(payload.model_dump(exclude_unset=True))
@@ -1823,8 +1893,15 @@ async def update_branch(branch_id: str, payload: BranchUpdate):
     return {"message": "Sucursal no encontrada"}
 
 @api_router.delete("/branches/{branch_id}")
-async def delete_branch(branch_id: str):
+async def delete_branch(
+    branch_id: str,
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    # Eliminar en PostgreSQL
+    await db.execute(delete(BranchModel).where(BranchModel.id == branch_id))
+    await db.commit()
+
     global branches_db, cash_registers_db
     branches_db = [b for b in branches_db if b["id"] != branch_id]
     cash_registers_db = [r for r in cash_registers_db if r["branch_id"] != branch_id]
@@ -1839,6 +1916,28 @@ async def list_cash_registers(
     verify_system_operational()
     current_user = await get_optional_current_user(authorization, db)
     biz_id = current_user.business_id if current_user else None
+
+    # Sincronizar cajas persistidas desde PostgreSQL
+    db_cr_res = await db.execute(select(CashRegisterModel))
+    for cr in db_cr_res.scalars().all():
+        if not any(r["id"] == cr.id for r in cash_registers_db):
+            b_name = next((b["name"] for b in branches_db if b["id"] == cr.branch_id), "Sucursal Asignada")
+            cash_registers_db.append({
+                "id": cr.id,
+                "business_id": cr.business_id,
+                "branch_id": cr.branch_id,
+                "branch_name": b_name,
+                "name": cr.name,
+                "hardware_uuid": cr.hardware_uuid or f"HW-POS-{cr.id[:6]}",
+                "status": "CLOSED",
+                "is_active": cr.is_active,
+                "current_operator": None,
+                "today_sales_total": 0.0,
+                "allowed_user_ids": ["usr-admin-01"],
+                "payment_methods": ["CASH_USD", "CASH_BS", "PAGO_MOVIL", "DEBIT_CARD"],
+                "created_at": cr.created_at or datetime.utcnow()
+            })
+
     registers = cash_registers_db
     if biz_id:
         registers = [r for r in registers if r.get("business_id") == biz_id]
@@ -1854,7 +1953,7 @@ async def create_cash_register(
 ):
     verify_system_operational()
     current_user = await get_optional_current_user(authorization, db)
-    biz_id = current_user.business_id if current_user else "biz-101"
+    biz_id = current_user.business_id if current_user and current_user.business_id else "biz-101"
 
     max_pos = xion_pay_state.get("limits", {}).get("max_pos_registers", 4)
     active_count = len([r for r in cash_registers_db if r.get("business_id") == biz_id and r.get("is_active", True)])
@@ -1870,8 +1969,9 @@ async def create_cash_register(
             branch_name = b["name"]
             break
 
+    register_id = f"reg-{int(datetime.utcnow().timestamp())}"
     new_r = {
-        "id": f"reg-{int(datetime.utcnow().timestamp())}",
+        "id": register_id,
         "business_id": biz_id,
         "branch_id": payload.branch_id,
         "branch_name": branch_name,
@@ -1885,15 +1985,40 @@ async def create_cash_register(
         "payment_methods": payload.payment_methods or ["CASH_USD", "CASH_BS", "PAGO_MOVIL", "DEBIT_CARD"],
         "created_at": datetime.utcnow()
     }
+
+    # Persistir en base de datos PostgreSQL
+    db_cr = CashRegisterModel(
+        id=register_id,
+        business_id=biz_id,
+        branch_id=payload.branch_id,
+        name=payload.name,
+        hardware_uuid=new_r["hardware_uuid"],
+        is_active=True
+    )
+    db.add(db_cr)
+    await db.commit()
+
     cash_registers_db.append(new_r)
-    recalculate_branch_cash_registers()
-    return new_r
     recalculate_branch_cash_registers()
     return new_r
 
 @api_router.put("/cash-registers/{register_id}")
-async def update_cash_register(register_id: str, payload: CashRegisterUpdate):
+async def update_cash_register(
+    register_id: str,
+    payload: CashRegisterUpdate,
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    # Actualizar en PostgreSQL
+    db_cr_res = await db.execute(select(CashRegisterModel).where(CashRegisterModel.id == register_id))
+    db_cr = db_cr_res.scalar_one_or_none()
+    if db_cr:
+        for k, v in payload.model_dump(exclude_unset=True).items():
+            if hasattr(db_cr, k):
+                setattr(db_cr, k, v)
+        db_cr.updated_at = datetime.utcnow()
+        await db.commit()
+
     for i, r in enumerate(cash_registers_db):
         if r["id"] == register_id:
             data = payload.model_dump(exclude_unset=True)
@@ -1908,8 +2033,15 @@ async def update_cash_register(register_id: str, payload: CashRegisterUpdate):
     return {"message": "Caja no encontrada"}
 
 @api_router.delete("/cash-registers/{register_id}")
-async def delete_cash_register(register_id: str):
+async def delete_cash_register(
+    register_id: str,
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    # Eliminar en PostgreSQL
+    await db.execute(delete(CashRegisterModel).where(CashRegisterModel.id == register_id))
+    await db.commit()
+
     global cash_registers_db
     cash_registers_db = [r for r in cash_registers_db if r["id"] != register_id]
     recalculate_branch_cash_registers()
