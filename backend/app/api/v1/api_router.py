@@ -1523,6 +1523,34 @@ async def get_user_profile(
         except Exception:
             session_data = None
 
+    # Auto-reparar branch_id si el usuario pertenece a una empresa pero no tiene sucursal asignada
+    if user.business_id and not user.branch_id:
+        try:
+            b_chk = await db.execute(select(BranchModel.id).where(BranchModel.business_id == user.business_id).order_by(BranchModel.created_at.asc()).limit(1))
+            found_br_id = b_chk.scalar_one_or_none()
+            if not found_br_id:
+                new_br_id = f"br-{uuid.uuid4().hex[:8]}"
+                b_biz = await db.execute(select(BusinessModel).where(BusinessModel.id == user.business_id))
+                biz_obj = b_biz.scalar_one_or_none()
+                b_name = f"Principal - {biz_obj.trade_name or biz_obj.legal_name}" if biz_obj else "Sucursal Principal"
+                db_branch = BranchModel(
+                    id=new_br_id,
+                    business_id=user.business_id,
+                    name=b_name,
+                    address="Sede Principal",
+                    is_active=True
+                )
+                db.add(db_branch)
+                await db.flush()
+                found_br_id = new_br_id
+
+            user.branch_id = found_br_id
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+        except Exception:
+            pass
+
     try:
         onboarding_completed = await _check_user_onboarding_completed(user, db)
     except Exception:

@@ -1,4 +1,5 @@
-from pydantic import BaseModel, Field, ConfigDict
+import re
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 
@@ -475,6 +476,23 @@ class CompanyInfoSchema(BaseModel):
     email: Optional[str] = None
     address: Optional[str] = None
 
+    @field_validator("tax_id")
+    @classmethod
+    def validate_tax_id(cls, v: str) -> str:
+        clean = v.strip().upper()
+        # Acepta Cédula (V-, E-) o RIF (J-, G-) con números
+        pattern = r"^[JVEGjveg]-?\d{5,10}(-?\d)?$"
+        if not re.match(pattern, clean):
+            raise ValueError("El RIF o Cédula debe tener un formato válido (Ej. V-12345678 o J-12345678-9).")
+        prefix = clean[0].upper()
+        digits = re.sub(r"[^\d]", "", clean)
+        if prefix in ("V", "E"):
+            return f"{prefix}-{digits}"
+        elif len(digits) > 8:
+            return f"{prefix}-{digits[:-1]}-{digits[-1]}"
+        else:
+            return f"{prefix}-{digits}"
+
 class OnboardingCompleteRequest(BaseModel):
     user_id: Optional[str] = None
     full_name: Optional[str] = None
@@ -489,6 +507,33 @@ class OnboardingCompleteRequest(BaseModel):
     preferences: Optional[Dict[str, Any]] = None
     plan_code: Optional[str] = "TRIAL"
     billing_cycle: Optional[str] = "MONTHLY"
+
+    @field_validator("full_name")
+    @classmethod
+    def validate_full_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            clean = v.strip()
+            if clean:
+                if re.search(r"\d", clean):
+                    raise ValueError("El nombre completo solo debe contener letras y espacios.")
+                if len(clean) < 2:
+                    raise ValueError("El nombre completo debe tener al menos 2 caracteres.")
+            return clean
+        return v
+
+    @field_validator("current_exchange_rate_bs")
+    @classmethod
+    def validate_exchange_rate(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= 0:
+            raise ValueError("La tasa de cambio oficial debe ser un número positivo mayor a 0.")
+        return v
+
+    @field_validator("tax_rate")
+    @classmethod
+    def validate_tax_rate(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and (v < 0 or v > 100):
+            raise ValueError("La tasa IVA debe estar entre 0% y 100%.")
+        return v
 
 class AuthTokenResponse(BaseModel):
     access_token: str

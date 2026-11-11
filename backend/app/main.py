@@ -101,14 +101,63 @@ async def on_startup():
     except Exception:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            
-    # Garantizar que business_id admita NULL para colaboradores en espera
+
+    # Migraciones idempotentes y auto-reparación de consistencia relacional
     try:
         from sqlalchemy import text
         async with engine.begin() as conn:
+            # 1. Garantizar columnas nullable para usuarios sin empresa (colaboradores en espera)
             await conn.execute(text("ALTER TABLE users ALTER COLUMN business_id DROP NOT NULL;"))
             await conn.execute(text("ALTER TABLE user_sessions ALTER COLUMN business_id DROP NOT NULL;"))
             await conn.execute(text("ALTER TABLE user_preferences ALTER COLUMN business_id DROP NOT NULL;"))
+
+            # 2. Crear tabla de vinculación de colaboradores si no existe
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS staff_pairings (
+                    id VARCHAR(36) PRIMARY KEY,
+                    pairing_code VARCHAR(10) UNIQUE NOT NULL,
+                    user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE,
+                    business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
+                    branch_id VARCHAR(36) REFERENCES branches(id) ON DELETE SET NULL,
+                    branch_name VARCHAR(120),
+                    email VARCHAR(120),
+                    full_name VARCHAR(150),
+                    phone VARCHAR(30),
+                    role VARCHAR(20) DEFAULT 'CASHIER',
+                    status VARCHAR(20) DEFAULT 'PENDING',
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'),
+                    expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL
+                );
+            """))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_staff_pairings_code ON staff_pairings (pairing_code);"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_staff_pairings_status ON staff_pairings (status);"))
+
+            # 3. Auto-reparación: Asegurar que toda empresa registrada posea su sucursal principal en branches
+            await conn.execute(text("""
+                INSERT INTO branches (id, business_id, name, address, is_active, created_at, updated_at)
+                SELECT 
+                    'br-' || substr(md5(b.id || '-main-branch'), 1, 8),
+                    b.id,
+                    'Principal - ' || COALESCE(NULLIF(b.trade_name, ''), NULLIF(b.legal_name, ''), 'Sede Principal'),
+                    'Sede Principal',
+                    true,
+                    NOW() AT TIME ZONE 'utc',
+                    NOW() AT TIME ZONE 'utc'
+                FROM businesses b
+                WHERE NOT EXISTS (SELECT 1 FROM branches br WHERE br.business_id = b.id);
+            """))
+
+            # 4. Auto-reparación: Asegurar que usuarios con business_id tengan su branch_id asignado a su sucursal
+            await conn.execute(text("""
+                UPDATE users u
+                SET branch_id = (
+                    SELECT br.id FROM branches br 
+                    WHERE br.business_id = u.business_id 
+                    ORDER BY br.created_at ASC 
+                    LIMIT 1
+                )
+                WHERE u.business_id IS NOT NULL AND u.branch_id IS NULL;
+            """))
     except Exception:
         pass
 

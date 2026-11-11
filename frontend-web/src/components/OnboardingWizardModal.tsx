@@ -24,6 +24,57 @@ interface AdditionalCompany {
   address: string;
 }
 
+export type DocType = 'V' | 'J' | 'E' | 'G';
+
+export const MOBILE_AREA_CODES = [
+  { code: '0414', label: '0414 (Movistar)' },
+  { code: '0424', label: '0424 (Movistar)' },
+  { code: '0412', label: '0412 (Digitel)' },
+  { code: '0416', label: '0416 (Movilnet)' },
+  { code: '0426', label: '0426 (Movilnet)' }
+];
+
+export const COMMERCIAL_AREA_CODES = [
+  { code: '0414', label: '0414 (Movistar)' },
+  { code: '0424', label: '0424 (Movistar)' },
+  { code: '0412', label: '0412 (Digitel)' },
+  { code: '0416', label: '0416 (Movilnet)' },
+  { code: '0426', label: '0426 (Movilnet)' },
+  { code: '0212', label: '0212 (Caracas)' },
+  { code: '0261', label: '0261 (Maracaibo)' },
+  { code: '0241', label: '0241 (Valencia)' },
+  { code: '0251', label: '0251 (Barquisimeto)' },
+  { code: '0276', label: '0276 (San Cristóbal)' },
+  { code: '0281', label: '0281 (Barcelona / PLC)' },
+  { code: '0243', label: '0243 (Maracay)' },
+  { code: '+58',  label: '+58 (Internacional)' }
+];
+
+const parseInitialPhone = (phoneStr?: string) => {
+  if (!phoneStr) return { area: '0414', digits: '' };
+  const cleaned = phoneStr.replace(/\D/g, '');
+  let norm = cleaned;
+  if (norm.startsWith('58')) norm = '0' + norm.slice(2);
+  for (const ac of ['0414', '0424', '0412', '0416', '0426', '0212', '0261', '0241', '0251', '0276', '0281', '0243']) {
+    if (norm.startsWith(ac)) {
+      return { area: ac, digits: norm.slice(ac.length, ac.length + 7) };
+    }
+  }
+  return { area: '0414', digits: norm.slice(-7) };
+};
+
+const parseInitialTaxId = (taxIdStr?: string) => {
+  if (!taxIdStr) return { type: 'J' as DocType, number: '', check: '' };
+  const clean = taxIdStr.trim().toUpperCase();
+  const first = clean[0];
+  const type: DocType = (['V', 'E', 'J', 'G'].includes(first) ? first : 'J') as DocType;
+  const digits = clean.replace(/\D/g, '');
+  if ((type === 'J' || type === 'G') && digits.length >= 9) {
+    return { type, number: digits.slice(0, -1), check: digits.slice(-1) };
+  }
+  return { type, number: digits, check: '' };
+};
+
 export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({ 
   currentUser, 
   onCompleted 
@@ -53,12 +104,22 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const [pairingSuccessMsg, setPairingSuccessMsg] = useState<string | null>(null);
 
   // Paso 1: Datos Personales y Compañía(s)
-  const [fullName, setFullName] = useState(currentUser.full_name || '');
-  const [personalPhone, setPersonalPhone] = useState(currentUser.phone || '');
+  const [fullName, setFullName] = useState(currentUser.full_name ? currentUser.full_name.replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s]/g, '') : '');
+  
+  const initialPersonal = parseInitialPhone(currentUser.phone);
+  const [personalAreaCode, setPersonalAreaCode] = useState(initialPersonal.area);
+  const [personalPhoneDigits, setPersonalPhoneDigits] = useState(initialPersonal.digits);
+
   const [companyTradeName, setCompanyTradeName] = useState('');
   const [companyLegalName, setCompanyLegalName] = useState('');
-  const [companyTaxId, setCompanyTaxId] = useState('');
-  const [companyPhone, setCompanyPhone] = useState('');
+  
+  const initialTax = parseInitialTaxId((currentUser as any).tax_id);
+  const [docType, setDocType] = useState<DocType>(initialTax.type);
+  const [docNumber, setDocNumber] = useState(initialTax.number);
+  const [docCheckDigit, setDocCheckDigit] = useState(initialTax.check);
+
+  const [companyAreaCode, setCompanyAreaCode] = useState('0414');
+  const [companyPhoneDigits, setCompanyPhoneDigits] = useState('');
   const [companyEmail, setCompanyEmail] = useState(currentUser.email || '');
   const [companyAddress, setCompanyAddress] = useState('');
   
@@ -67,7 +128,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const [showAddCompanyForm, setShowAddCompanyForm] = useState(false);
   const [newCompTrade, setNewCompTrade] = useState('');
   const [newCompLegal, setNewCompLegal] = useState('');
-  const [newCompTaxId, setNewCompTaxId] = useState('');
+  const [newCompDocType, setNewCompDocType] = useState<DocType>('J');
+  const [newCompDocNumber, setNewCompDocNumber] = useState('');
+  const [newCompDocCheck, setNewCompDocCheck] = useState('');
 
   // Paso 2: Configuraciones y Preferencias
   const [currencySymbol, setCurrencySymbol] = useState('Bs.');
@@ -327,19 +390,39 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     handleExecuteStaffConnection(branch.id, branch.name, res?.request?.role || 'CASHIER', (res as any)?.business_id || res?.request?.business_id);
   };
 
+  const getFullTaxId = (type: DocType, num: string, check: string) => {
+    const cleanNum = num.trim();
+    if (!cleanNum) return '';
+    if (type === 'V' || type === 'E') {
+      return `${type}-${cleanNum}`;
+    }
+    return check.trim() ? `${type}-${cleanNum}-${check.trim()}` : `${type}-${cleanNum}`;
+  };
+
+  const getFullPhone = (area: string, digits: string) => {
+    if (!digits.trim()) return '';
+    const cleanArea = area.startsWith('0') ? area.slice(1) : area.replace('+', '');
+    return `+58 ${cleanArea} ${digits.trim()}`;
+  };
+
   const handleAddAdditionalCompany = () => {
-    if (!newCompTrade.trim() || !newCompTaxId.trim()) return;
+    const fullTax = getFullTaxId(newCompDocType, newCompDocNumber, newCompDocCheck);
+    if (!newCompTrade.trim() || !fullTax) {
+      setErrorMsg('Por favor completa el nombre comercial y el RIF/Cédula de la nueva compañía.');
+      return;
+    }
     const item: AdditionalCompany = {
       id: `comp-${Date.now()}`,
-      trade_name: newCompTrade,
-      legal_name: newCompLegal || newCompTrade,
-      tax_id: newCompTaxId,
-      address: companyAddress
+      trade_name: newCompTrade.trim(),
+      legal_name: newCompLegal.trim() || newCompTrade.trim(),
+      tax_id: fullTax,
+      address: companyAddress.trim() || 'Sede Adicional'
     };
     setAdditionalCompanies([...additionalCompanies, item]);
     setNewCompTrade('');
     setNewCompLegal('');
-    setNewCompTaxId('');
+    setNewCompDocNumber('');
+    setNewCompDocCheck('');
     setShowAddCompanyForm(false);
   };
 
@@ -360,17 +443,21 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
       await api.updatePreferences(updatedPrefs);
       applySystemPreferences(updatedPrefs);
 
+      const finalTaxId = getFullTaxId(docType, docNumber, docCheckDigit);
+      const finalPersonalPhone = getFullPhone(personalAreaCode, personalPhoneDigits);
+      const finalCompanyPhone = getFullPhone(companyAreaCode, companyPhoneDigits) || finalPersonalPhone;
+
       const payload = {
         user_id: currentUser.id,
-        full_name: fullName,
-        phone: personalPhone,
+        full_name: fullName.trim(),
+        phone: finalPersonalPhone,
         primary_company: {
-          trade_name: companyTradeName,
-          legal_name: companyLegalName,
-          tax_id: companyTaxId,
-          phone: companyPhone,
-          email: companyEmail,
-          address: companyAddress
+          trade_name: companyTradeName.trim(),
+          legal_name: companyLegalName.trim() || companyTradeName.trim(),
+          tax_id: finalTaxId,
+          phone: finalCompanyPhone,
+          email: companyEmail.trim(),
+          address: companyAddress.trim() || 'Sede Principal'
         },
         additional_companies: additionalCompanies.map(c => ({
           trade_name: c.trade_name,
@@ -394,8 +481,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
       const updatedUser: User = {
         ...currentUser,
-        full_name: fullName,
-        phone: personalPhone,
+        full_name: fullName.trim(),
+        phone: finalPersonalPhone,
         business_id: (res as any)?.business?.id || (res as any)?.user?.business_id || currentUser.business_id,
         role: 'OWNER',
         approval_status: 'APPROVED',
@@ -418,16 +505,25 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
   const handleConfirmCollaboratorInfo = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!fullName.trim()) {
-      setErrorMsg('Por favor ingresa tu nombre completo.');
+    if (!fullName.trim() || fullName.trim().length < 3) {
+      setErrorMsg('Por favor ingresa tu nombre completo (mínimo 3 letras).');
+      return;
+    }
+    if (/\d/.test(fullName)) {
+      setErrorMsg('El nombre completo no puede contener números, solo letras y espacios.');
+      return;
+    }
+    if (personalPhoneDigits && !/^\d{7}$/.test(personalPhoneDigits)) {
+      setErrorMsg('El teléfono celular debe contener exactamente 7 dígitos numéricos tras el código de área.');
       return;
     }
     setErrorMsg(null);
     setLoading(true);
+    const finalPersonalPhone = getFullPhone(personalAreaCode, personalPhoneDigits);
     try {
       const res = await api.selectCollaboratorRole(currentUser.id, {
         full_name: fullName.trim(),
-        phone: personalPhone.trim()
+        phone: finalPersonalPhone
       });
       if (res && res.user) {
         onCompleted(res.user);
@@ -441,7 +537,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     onCompleted({
       ...currentUser,
       full_name: fullName.trim() || currentUser.full_name,
-      phone: personalPhone.trim() || currentUser.phone,
+      phone: finalPersonalPhone || currentUser.phone,
       role: 'CASHIER',
       business_id: undefined,
       branch_id: undefined,
@@ -467,35 +563,35 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-in fade-in duration-300">
+    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 overflow-y-auto animate-in fade-in duration-300">
       {/* Luces de Fondo Neón */}
       <div className="fixed top-1/4 left-1/2 -translate-x-1/2 w-[550px] h-[350px] bg-cyan-500/10 rounded-full blur-[120px] pointer-events-none" />
       <div className="fixed bottom-1/4 left-1/3 w-[400px] h-[300px] bg-blue-600/10 rounded-full blur-[100px] pointer-events-none" />
 
-      <div className="w-full max-w-3xl bg-slate-900/95 border border-cyan-500/30 rounded-3xl shadow-2xl shadow-cyan-950/40 overflow-hidden relative z-10 flex flex-col my-auto max-h-[92vh]">
+      <div className="w-full max-w-3xl bg-slate-900/95 border border-cyan-500/30 rounded-2xl sm:rounded-3xl shadow-2xl shadow-cyan-950/40 overflow-hidden relative z-10 flex flex-col my-auto max-h-[94dvh]">
         
         {/* Encabezado Superior */}
-        <div className="p-5 sm:p-6 border-b border-slate-800/80 bg-gradient-to-r from-slate-900 via-slate-900/90 to-cyan-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="p-3.5 sm:p-5 border-b border-slate-800/80 bg-gradient-to-r from-slate-900 via-slate-900/90 to-cyan-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/30">
-              <Sparkles className="w-6 h-6" />
+            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/30 shrink-0">
+              <Sparkles className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
                   Bienvenido a Xion-Manager
                 </span>
                 {(step === 'STAFF_PAIRING' || step === 'COLLABORATOR_BASIC_INFO') && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                  <span className="text-[9px] sm:text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
                     Acceso Colaborador
                   </span>
                 )}
               </div>
-              <h2 className="text-lg sm:text-xl font-black text-white mt-0.5">
+              <h2 className="text-base sm:text-lg lg:text-xl font-black text-white mt-0.5">
                 {step === 0 && 'Selección de Perfil de Acceso'}
                 {step === 'COLLABORATOR_BASIC_INFO' && 'Datos Básicos de Colaborador'}
-                {step === 'STAFF_PAIRING' && 'Vinculación de Colaborador a la Empresa'}
-                {step === 1 && 'Paso 1: Datos de tu Empresa Principal'}
+                {step === 'STAFF_PAIRING' && 'Vinculación de Colaborador'}
+                {step === 1 && 'Paso 1: Datos de tu Empresa'}
                 {step === 2 && 'Paso 2: Parámetros del Sistema'}
                 {step === 3 && 'Paso 3: Selección de Plan Operativo'}
               </h2>
@@ -504,7 +600,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
           {/* Stepper Wizard Progress (Solo visible en flujo de Propietario) */}
           {typeof step === 'number' && step > 0 && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2 self-end sm:self-auto">
               {[
                 { num: 1, label: 'Empresa', icon: Building2 },
                 { num: 2, label: 'Sistema', icon: Settings },
@@ -514,8 +610,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                 const isActive = step === s.num;
                 const isDone = step > s.num;
                 return (
-                  <div key={s.num} className="flex items-center gap-1.5">
-                    <div className={`flex items-center gap-1 px-3 py-1 rounded-xl text-xs font-bold transition-all border ${
+                  <div key={s.num} className="flex items-center gap-1 sm:gap-1.5">
+                    <div className={`flex items-center gap-1 px-2.5 sm:px-3 py-1 rounded-xl text-[11px] sm:text-xs font-bold transition-all border ${
                       isActive 
                         ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-500/30' 
                         : isDone
@@ -523,9 +619,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                         : 'bg-slate-900/60 text-slate-500 border-slate-800'
                     }`}>
                       {isDone ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : <Icon className="w-3.5 h-3.5" />}
-                      <span className="hidden xs:inline">{s.label}</span>
+                      <span className="hidden sm:inline">{s.label}</span>
                     </div>
-                    {s.num < 3 && <div className="w-3 h-0.5 bg-slate-800" />}
+                    {s.num < 3 && <div className="w-1.5 sm:w-3 h-0.5 bg-slate-800" />}
                   </div>
                 );
               })}
@@ -541,7 +637,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         </div>
 
         {/* Modal Scrollable Body */}
-        <div className="p-5 sm:p-7 overflow-y-auto space-y-6 flex-1 text-slate-200">
+        <div className="p-3.5 sm:p-6 overflow-y-auto space-y-4 sm:space-y-6 flex-1 text-slate-200">
           
           {errorMsg && (
             <div className="p-3.5 rounded-xl bg-red-500/15 border border-red-500/40 text-red-300 text-xs flex items-center gap-2 animate-in fade-in">
@@ -682,31 +778,51 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
               <form onSubmit={handleConfirmCollaboratorInfo} className="space-y-4 max-w-md mx-auto">
                 <div className="space-y-1.5 text-left">
-                  <label className="text-xs font-bold text-slate-300">Nombre Completo *</label>
+                  <label className="text-xs font-bold text-slate-300">Nombre Completo (Solo Letras) *</label>
                   <input
                     type="text"
                     required
                     value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
+                    onChange={(e) => setFullName(e.target.value.replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s]/g, ''))}
                     placeholder="Ej. Juan Pérez"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all min-h-[44px]"
                   />
                 </div>
 
                 <div className="space-y-1.5 text-left">
-                  <label className="text-xs font-bold text-slate-300">Teléfono Personal / WhatsApp</label>
-                  <input
-                    type="text"
-                    value={personalPhone}
-                    onChange={(e) => setPersonalPhone(e.target.value)}
-                    placeholder="Ej. +58 412 1234567"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
-                  />
+                  <label className="text-xs font-bold text-slate-300">Teléfono Personal / WhatsApp *</label>
+                  <div className="flex gap-2">
+                    <select
+                      value={personalAreaCode}
+                      onChange={(e) => setPersonalAreaCode(e.target.value)}
+                      className="w-32 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-cyan-300 font-bold focus:outline-none focus:border-cyan-500 shrink-0 min-h-[44px]"
+                    >
+                      {MOBILE_AREA_CODES.map((item) => (
+                        <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={7}
+                      required
+                      value={personalPhoneDigits}
+                      onChange={(e) => setPersonalPhoneDigits(e.target.value.replace(/\D/g, '').slice(0, 7))}
+                      placeholder="1234567 (7 dígitos)"
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all min-h-[44px]"
+                    />
+                  </div>
+                  <span className="text-[10px] text-slate-500">
+                    Formato: {personalAreaCode}-{personalPhoneDigits || 'XXXXXXX'}
+                  </span>
                 </div>
 
                 <button
                   type="submit"
-                  disabled={loading || !fullName.trim()}
+                  disabled={loading || !fullName.trim() || personalPhoneDigits.length !== 7}
                   className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/25 flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 min-h-[44px]"
                 >
                   {loading ? (
@@ -1039,24 +1155,40 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                   <div>
-                    <label className="block text-slate-400 font-semibold mb-1">Nombre Completo *</label>
+                    <label className="block text-slate-400 font-semibold mb-1">Nombre Completo (Solo Letras) *</label>
                     <input
                       type="text"
                       value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
+                      onChange={(e) => setFullName(e.target.value.replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s]/g, ''))}
                       placeholder="Ej. Roberto Morales"
-                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400"
+                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400 min-h-[44px]"
                     />
                   </div>
                   <div>
                     <label className="block text-slate-400 font-semibold mb-1">Teléfono Personal / WhatsApp *</label>
-                    <input
-                      type="text"
-                      value={personalPhone}
-                      onChange={(e) => setPersonalPhone(e.target.value)}
-                      placeholder="+58 414-1234567"
-                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400"
-                    />
+                    <div className="flex gap-2">
+                      <select
+                        value={personalAreaCode}
+                        onChange={(e) => setPersonalAreaCode(e.target.value)}
+                        className="w-28 bg-slate-900 border border-slate-700/80 rounded-xl px-2 py-2 text-slate-200 font-bold focus:outline-none focus:border-cyan-400 shrink-0 min-h-[44px]"
+                      >
+                        {MOBILE_AREA_CODES.map((item) => (
+                          <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={7}
+                        value={personalPhoneDigits}
+                        onChange={(e) => setPersonalPhoneDigits(e.target.value.replace(/\D/g, '').slice(0, 7))}
+                        placeholder="1234567"
+                        className="flex-1 bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 font-mono focus:outline-none focus:border-cyan-400 min-h-[44px]"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1081,39 +1213,120 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                       value={companyTradeName}
                       onChange={(e) => setCompanyTradeName(e.target.value)}
                       placeholder="Ej. Supermercados Xion"
-                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400"
+                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400 min-h-[44px]"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-400 font-semibold mb-1">Razón Social Legal *</label>
+                    <label className="block text-slate-400 font-semibold mb-1">Razón Social Legal</label>
                     <input
                       type="text"
                       value={companyLegalName}
                       onChange={(e) => setCompanyLegalName(e.target.value)}
                       placeholder="Ej. Comercializadora Xion C.A."
-                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400"
+                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400 min-h-[44px]"
                     />
                   </div>
-                  <div>
-                    <label className="block text-slate-400 font-semibold mb-1">RIF / Identificación Fiscal *</label>
-                    <input
-                      type="text"
-                      value={companyTaxId}
-                      onChange={(e) => setCompanyTaxId(e.target.value)}
-                      placeholder="Ej. J-12345678-9"
-                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400"
-                    />
+
+                  {/* Cédula vs RIF Selector */}
+                  <div className="sm:col-span-2 bg-slate-900/60 p-3 rounded-xl border border-slate-800 space-y-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
+                      <label className="text-slate-300 font-bold text-xs">
+                        {docType === 'V' || docType === 'E' ? 'Cédula de Identidad de Propietario *' : 'RIF Fiscal de la Empresa *'}
+                      </label>
+                      <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px] font-bold self-start sm:self-auto">
+                        {(['V', 'J', 'E', 'G'] as DocType[]).map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => setDocType(t)}
+                            className={`px-2.5 py-1 rounded-md transition-all ${
+                              docType === t
+                                ? 'bg-cyan-500 text-slate-950 font-black shadow-sm'
+                                : 'text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            {t === 'V' && 'V (Cédula)'}
+                            {t === 'J' && 'J (RIF)'}
+                            {t === 'E' && 'E (Extranjero)'}
+                            {t === 'G' && 'G (Gob)'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <div className="w-14 bg-slate-950 border border-slate-700 rounded-xl flex items-center justify-center font-mono font-black text-cyan-400 text-xs shrink-0 min-h-[44px]">
+                        {docType}-
+                      </div>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={9}
+                        value={docNumber}
+                        onChange={(e) => setDocNumber(e.target.value.replace(/\D/g, '').slice(0, 9))}
+                        placeholder={docType === 'V' || docType === 'E' ? 'Ej. 24123456 (Cédula)' : 'Ej. 50123456'}
+                        className="flex-1 bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 font-mono focus:outline-none focus:border-cyan-400 min-h-[44px]"
+                      />
+                      {(docType === 'J' || docType === 'G') && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-slate-500 font-mono">-</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            maxLength={1}
+                            value={docCheckDigit}
+                            onChange={(e) => setDocCheckDigit(e.target.value.replace(/\D/g, '').slice(0, 1))}
+                            placeholder="0-9"
+                            className="w-12 bg-slate-900 border border-slate-700/80 rounded-xl text-center py-2 text-slate-100 font-mono font-bold focus:outline-none focus:border-cyan-400 min-h-[44px]"
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-mono block">
+                      Identificación formateada: <strong className="text-cyan-400">{getFullTaxId(docType, docNumber, docCheckDigit) || 'Incompleta'}</strong>
+                    </span>
                   </div>
+
                   <div>
                     <label className="block text-slate-400 font-semibold mb-1">Teléfono Comercial *</label>
+                    <div className="flex gap-2">
+                      <select
+                        value={companyAreaCode}
+                        onChange={(e) => setCompanyAreaCode(e.target.value)}
+                        className="w-28 bg-slate-900 border border-slate-700/80 rounded-xl px-2 py-2 text-slate-200 font-bold focus:outline-none focus:border-cyan-400 shrink-0 min-h-[44px]"
+                      >
+                        {COMMERCIAL_AREA_CODES.map((item) => (
+                          <option key={item.code} value={item.code} className="bg-slate-900 text-white">
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={7}
+                        value={companyPhoneDigits}
+                        onChange={(e) => setCompanyPhoneDigits(e.target.value.replace(/\D/g, '').slice(0, 7))}
+                        placeholder="1234567"
+                        className="flex-1 bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 font-mono focus:outline-none focus:border-cyan-400 min-h-[44px]"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 font-semibold mb-1">Correo Electrónico Comercial</label>
                     <input
-                      type="text"
-                      value={companyPhone}
-                      onChange={(e) => setCompanyPhone(e.target.value)}
-                      placeholder="+58 212-9876543"
-                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400"
+                      type="email"
+                      value={companyEmail}
+                      onChange={(e) => setCompanyEmail(e.target.value)}
+                      placeholder="contacto@empresa.com"
+                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400 min-h-[44px]"
                     />
                   </div>
+
                   <div className="sm:col-span-2">
                     <label className="block text-slate-400 font-semibold mb-1">Dirección Fiscal / Principal *</label>
                     <input
@@ -1121,7 +1334,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                       value={companyAddress}
                       onChange={(e) => setCompanyAddress(e.target.value)}
                       placeholder="Calle, Sector, Ciudad, Estado"
-                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400"
+                      className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-cyan-400 min-h-[44px]"
                     />
                   </div>
                 </div>
@@ -1129,7 +1342,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
               {/* Múltiples Compañías */}
               <div className="bg-slate-950/30 p-4 rounded-2xl border border-slate-800/80 space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                   <div>
                     <span className="text-xs font-bold text-slate-300">¿Operas múltiples compañías o marcas?</span>
                     <p className="text-[11px] text-slate-500">Puedes registrar otras razones sociales vinculadas a tu cuenta multi-sucursal.</p>
@@ -1138,7 +1351,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setShowAddCompanyForm(true)}
-                      className="px-3 py-1.5 rounded-xl border border-cyan-500/40 bg-cyan-950/30 hover:bg-cyan-900/40 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 transition-all"
+                      className="px-3 py-1.5 rounded-xl border border-cyan-500/40 bg-cyan-950/30 hover:bg-cyan-900/40 text-cyan-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all self-start sm:self-auto min-h-[38px]"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       <span>Agregar Compañía</span>
@@ -1170,43 +1383,70 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                 )}
 
                 {showAddCompanyForm && (
-                  <div className="p-3 rounded-xl bg-slate-900/90 border border-cyan-500/30 space-y-3 text-xs animate-in fade-in">
+                  <div className="p-3.5 rounded-xl bg-slate-900/90 border border-cyan-500/30 space-y-3 text-xs animate-in fade-in">
                     <span className="font-bold text-cyan-300 block">Nueva Compañía Adicional</span>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                       <input
                         type="text"
-                        placeholder="Nombre Comercial"
+                        placeholder="Nombre Comercial *"
                         value={newCompTrade}
                         onChange={(e) => setNewCompTrade(e.target.value)}
-                        className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-100"
+                        className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-slate-100 min-h-[40px]"
                       />
                       <input
                         type="text"
                         placeholder="Razón Social Legal"
                         value={newCompLegal}
                         onChange={(e) => setNewCompLegal(e.target.value)}
-                        className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-100"
+                        className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-slate-100 min-h-[40px]"
                       />
-                      <input
-                        type="text"
-                        placeholder="RIF (Ej. J-88776655-4)"
-                        value={newCompTaxId}
-                        onChange={(e) => setNewCompTaxId(e.target.value)}
-                        className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-100"
-                      />
+                      <div className="sm:col-span-2 flex gap-2">
+                        <select
+                          value={newCompDocType}
+                          onChange={(e) => setNewCompDocType(e.target.value as DocType)}
+                          className="w-20 bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-cyan-300 font-bold min-h-[40px]"
+                        >
+                          <option value="J">J - RIF</option>
+                          <option value="V">V - Cédula</option>
+                          <option value="E">E - Extr.</option>
+                          <option value="G">G - Gob.</option>
+                        </select>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          maxLength={9}
+                          placeholder={newCompDocType === 'V' || newCompDocType === 'E' ? 'Cédula (números)' : 'RIF (números)'}
+                          value={newCompDocNumber}
+                          onChange={(e) => setNewCompDocNumber(e.target.value.replace(/\D/g, '').slice(0, 9))}
+                          className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-slate-100 font-mono min-h-[40px]"
+                        />
+                        {(newCompDocType === 'J' || newCompDocType === 'G') && (
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            maxLength={1}
+                            placeholder="0-9"
+                            value={newCompDocCheck}
+                            onChange={(e) => setNewCompDocCheck(e.target.value.replace(/\D/g, '').slice(0, 1))}
+                            className="w-12 bg-slate-950 border border-slate-800 rounded-lg text-center py-2 text-slate-100 font-mono font-bold min-h-[40px]"
+                          />
+                        )}
+                      </div>
                     </div>
                     <div className="flex justify-end gap-2">
                       <button
                         type="button"
                         onClick={() => setShowAddCompanyForm(false)}
-                        className="px-3 py-1 rounded-lg text-slate-400 hover:text-slate-200"
+                        className="px-3 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 min-h-[36px]"
                       >
                         Cancelar
                       </button>
                       <button
                         type="button"
                         onClick={handleAddAdditionalCompany}
-                        className="px-3 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold"
+                        className="px-3.5 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold min-h-[36px]"
                       >
                         Guardar Compañía
                       </button>
@@ -1530,14 +1770,14 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
         {/* Barra de Acciones Inferior (Solo para flujo de Propietario) */}
         {typeof step === 'number' && step > 0 && (
-          <div className="p-4 sm:p-5 border-t border-slate-800/80 bg-slate-900/90 flex items-center justify-between">
+          <div className="sticky bottom-0 z-20 p-3 sm:p-5 border-t border-slate-800/90 bg-slate-900/95 backdrop-blur-md flex items-center justify-between min-h-[58px]">
             <div>
               {step > 1 ? (
                 <button
                   type="button"
                   disabled={loading}
                   onClick={() => setStep((step - 1) as any)}
-                  className="px-4 py-2 rounded-xl border border-slate-700 hover:border-slate-600 bg-slate-800/80 text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-all"
+                  className="px-3.5 sm:px-4 py-2 rounded-xl border border-slate-700 hover:border-slate-600 bg-slate-800/80 text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-all min-h-[42px]"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" />
                   <span>Atrás</span>
@@ -1546,10 +1786,11 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setStep(0)}
-                  className="px-3 py-1.5 rounded-xl border border-slate-700 hover:border-slate-600 bg-slate-800/60 text-slate-400 hover:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-all"
+                  className="px-3 py-1.5 rounded-xl border border-slate-700 hover:border-slate-600 bg-slate-800/60 text-slate-400 hover:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-all min-h-[42px]"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" />
-                  <span>Cambiar Rol</span>
+                  <span className="hidden xs:inline">Cambiar Rol</span>
+                  <span className="xs:hidden">Rol</span>
                 </button>
               )}
             </div>
@@ -1559,14 +1800,50 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    if (step === 1 && (!fullName.trim() || !companyTradeName.trim() || !companyTaxId.trim())) {
-                      setErrorMsg('Por favor completa el nombre, el nombre comercial y el RIF de la empresa.');
-                      return;
+                    if (step === 1) {
+                      if (!fullName.trim() || fullName.trim().length < 3) {
+                        setErrorMsg('Por favor ingresa tu nombre completo (mínimo 3 letras, solo letras y espacios).');
+                        return;
+                      }
+                      if (personalPhoneDigits.length !== 7) {
+                        setErrorMsg('El teléfono personal celular debe contener exactamente 7 dígitos numéricos tras el código de área.');
+                        return;
+                      }
+                      if (!companyTradeName.trim()) {
+                        setErrorMsg('Por favor ingresa el nombre comercial de la empresa.');
+                        return;
+                      }
+                      if (docNumber.length < 6) {
+                        setErrorMsg('El número de Cédula o RIF debe contener al menos 6 dígitos numéricos.');
+                        return;
+                      }
+                      if ((docType === 'J' || docType === 'G') && !docCheckDigit) {
+                        setErrorMsg('Para RIF Jurídico o Gubernamental debes ingresar el dígito verificador final (0-9).');
+                        return;
+                      }
+                      if (companyPhoneDigits && companyPhoneDigits.length !== 7) {
+                        setErrorMsg('El teléfono comercial debe contener exactamente 7 dígitos numéricos tras el código de área.');
+                        return;
+                      }
+                      if (!companyAddress.trim()) {
+                        setErrorMsg('Por favor ingresa la dirección fiscal o sede de la empresa.');
+                        return;
+                      }
+                    }
+                    if (step === 2) {
+                      if (!exchangeRate || Number(exchangeRate) <= 0) {
+                        setErrorMsg('La tasa de cambio oficial debe ser un valor numérico positivo mayor a 0.');
+                        return;
+                      }
+                      if (enableTaxes && (Number(taxRate) < 0 || Number(taxRate) > 100)) {
+                        setErrorMsg('La tasa de IVA debe encontrarse entre 0% y 100%.');
+                        return;
+                      }
                     }
                     setErrorMsg(null);
                     setStep((step + 1) as any);
                   }}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/20 flex items-center gap-2 transition-all"
+                  className="px-4 sm:px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/20 flex items-center gap-2 transition-all min-h-[44px] active:scale-95"
                 >
                   <span>Continuar</span>
                   <ArrowRight className="w-3.5 h-3.5" />
@@ -1576,17 +1853,19 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   type="button"
                   disabled={loading}
                   onClick={handleCompleteOnboarding}
-                  className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-400 via-cyan-400 to-blue-500 hover:from-emerald-300 hover:to-cyan-300 text-slate-950 font-black text-xs shadow-xl shadow-cyan-500/30 flex items-center gap-2 transition-all active:scale-95"
+                  className="px-4 sm:px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-400 via-cyan-400 to-blue-500 hover:from-emerald-300 hover:to-cyan-300 text-slate-950 font-black text-xs shadow-xl shadow-cyan-500/30 flex items-center gap-2 transition-all active:scale-95 min-h-[44px]"
                 >
                   {loading ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Activando tu Cuenta...</span>
+                      <span className="hidden xs:inline">Activando tu Cuenta...</span>
+                      <span className="xs:hidden">Activando...</span>
                     </>
                   ) : (
                     <>
                       <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
-                      <span>Completar e Iniciar Operaciones</span>
+                      <span className="hidden xs:inline">Completar e Iniciar Operaciones</span>
+                      <span className="xs:hidden">Completar</span>
                     </>
                   )}
                 </button>
