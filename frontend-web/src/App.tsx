@@ -89,6 +89,13 @@ export const App: React.FC = () => {
     api.getPreferences().then(applySystemPreferences);
   }, []);
 
+  // Sincronizar persistencia local para usuarios existentes que no requieren onboarding
+  useEffect(() => {
+    if (currentUser?.id && (currentUser.business_id || currentUser.onboarding_completed === true || currentUser.is_new_user === false)) {
+      localStorage.setItem(`xion_onboarding_completed_${currentUser.id}`, 'true');
+    }
+  }, [currentUser]);
+
   const handleLoginSuccess = async (user: User | null) => {
     handleUpdateUser(user);
     if (user) {
@@ -134,12 +141,6 @@ export const App: React.FC = () => {
       />
     );
   }
-
-  useEffect(() => {
-    if (currentUser?.id && (currentUser.business_id || currentUser.onboarding_completed === true || currentUser.is_new_user === false)) {
-      localStorage.setItem(`xion_onboarding_completed_${currentUser.id}`, 'true');
-    }
-  }, [currentUser]);
 
   // Validación estricta: El formulario de onboarding inicial ÚNICAMENTE se muestra si el usuario es nuevo
   // (es decir, no existía previamente en la base de datos con empresa o registro previo completado).
