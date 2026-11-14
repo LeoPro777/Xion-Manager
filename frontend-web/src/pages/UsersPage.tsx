@@ -21,7 +21,6 @@ export const UsersPage: React.FC = () => {
   const [editRole, setEditRole] = useState<Role>('CASHIER');
   const [editBranchId, setEditBranchId] = useState<string>('global');
   const [editIsActive, setEditIsActive] = useState<boolean>(true);
-  const [editApprovalStatus, setEditApprovalStatus] = useState<'APPROVED' | 'PENDING' | 'REJECTED'>('APPROVED');
   const [isSavingUser, setIsSavingUser] = useState(false);
 
   // Modal de Vinculación de Personal (Código Numérico de 6 Dígitos / QR)
@@ -53,8 +52,7 @@ export const UsersPage: React.FC = () => {
     setEditPhone(u.phone || '');
     setEditRole(u.role || 'CASHIER');
     setEditBranchId(u.branch_id || 'global');
-    setEditIsActive(u.is_active ?? true);
-    setEditApprovalStatus(u.approval_status || 'APPROVED');
+    setEditIsActive(u.is_active && u.approval_status !== 'REJECTED');
   };
 
   const handleSaveUser = async (e: React.FormEvent) => {
@@ -71,14 +69,15 @@ export const UsersPage: React.FC = () => {
         branch_id: editBranchId === 'global' ? undefined : editBranchId,
         branch_name: branchName,
         is_active: editIsActive,
-        approval_status: editApprovalStatus
+        approval_status: editIsActive ? 'APPROVED' : 'REJECTED'
       });
       setUsers(users.map(u => u.id === editingUser.id ? { ...u, ...updated } : u));
       setActionMsg('Usuario y permisos actualizados exitosamente');
       setEditingUser(null);
       setTimeout(() => setActionMsg(''), 4000);
-    } catch {
-      setActionMsg('Error al guardar modificaciones del usuario');
+    } catch (err: any) {
+      setActionMsg(err?.message || 'Error al guardar modificaciones del usuario');
+      setTimeout(() => setActionMsg(''), 4000);
     } finally {
       setIsSavingUser(false);
     }
@@ -138,6 +137,35 @@ export const UsersPage: React.FC = () => {
     } catch {}
   };
 
+
+  const currentUserStr = localStorage.getItem('xion_user');
+  const currentUserId = currentUserStr ? JSON.parse(currentUserStr).id : null;
+
+  const handleRevokeAccess = async (u: User) => {
+    if (window.confirm(`¿Estás seguro de que deseas quitarle el acceso al sistema a "${u.full_name}"?\n\nEl usuario no podrá iniciar sesión en Xion-Manager ni operar en cajas hasta que sea reactivado.`)) {
+      try {
+        await api.revokeUserAccess(u.id);
+        setUsers(users.map(item => item.id === u.id ? { ...item, is_active: false, approval_status: 'REJECTED' } : item));
+        setActionMsg(`Acceso revocado exitosamente para ${u.full_name}`);
+        setTimeout(() => setActionMsg(''), 4000);
+      } catch (err: any) {
+        setActionMsg(err?.message || 'Error al revocar el acceso del usuario');
+        setTimeout(() => setActionMsg(''), 4000);
+      }
+    }
+  };
+
+  const handleRestoreAccess = async (u: User) => {
+    try {
+      await api.updateUser(u.id, { is_active: true, approval_status: 'APPROVED' });
+      setUsers(users.map(item => item.id === u.id ? { ...item, is_active: true, approval_status: 'APPROVED' } : item));
+      setActionMsg(`Acceso restablecido exitosamente para ${u.full_name}`);
+      setTimeout(() => setActionMsg(''), 4000);
+    } catch (err: any) {
+      setActionMsg(err?.message || 'Error al restablecer el acceso del usuario');
+      setTimeout(() => setActionMsg(''), 4000);
+    }
+  };
 
   const handleApproval = async (userId: string, newStatus: 'APPROVED' | 'REJECTED') => {
     const res = await api.updateUserApproval(userId, newStatus);
@@ -265,6 +293,11 @@ export const UsersPage: React.FC = () => {
                           <Clock className="w-3.5 h-3.5" />
                           Pendiente Revisión
                         </span>
+                      ) : (!u.is_active || u.approval_status === 'REJECTED') ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                          <UserX className="w-3.5 h-3.5" />
+                          Acceso Revocado
+                        </span>
                       ) : (
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                           <CheckCircle2 className="w-3.5 h-3.5" />
@@ -293,6 +326,29 @@ export const UsersPage: React.FC = () => {
                               Rechazar
                             </button>
                           </>
+                        )}
+                        {!isPending && u.id !== currentUserId && (
+                          (u.is_active && u.approval_status !== 'REJECTED') ? (
+                            <button
+                              type="button"
+                              onClick={() => handleRevokeAccess(u)}
+                              className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500 text-rose-300 hover:text-white border border-rose-500/30 font-bold text-xs flex items-center gap-1 transition-all"
+                              title="Quitarle el acceso a este usuario"
+                            >
+                              <UserX className="w-3.5 h-3.5" />
+                              <span>Quitar Acceso</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleRestoreAccess(u)}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500 text-emerald-300 hover:text-white border border-emerald-500/30 font-bold text-xs flex items-center gap-1 transition-all"
+                              title="Restablecer acceso a este usuario"
+                            >
+                              <UserCheck className="w-3.5 h-3.5" />
+                              <span>Restablecer</span>
+                            </button>
+                          )
                         )}
                         <button
                           onClick={() => handleOpenEditUser(u)}
@@ -348,6 +404,10 @@ export const UsersPage: React.FC = () => {
                   <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-400">
                     <Clock className="w-3 h-3" /> Pendiente
                   </span>
+                ) : (!u.is_active || u.approval_status === 'REJECTED') ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-400">
+                    <UserX className="w-3 h-3" /> Acceso Revocado
+                  </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-400">
                     <CheckCircle2 className="w-3 h-3" /> Autorizado
@@ -362,7 +422,7 @@ export const UsersPage: React.FC = () => {
                   className="py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs font-bold flex items-center gap-1.5"
                 >
                   <Edit className="w-3.5 h-3.5" />
-                  <span>Editar Permisos</span>
+                  <span>Editar</span>
                 </button>
                 {isPending ? (
                   <div className="flex items-center gap-1.5">
@@ -380,10 +440,26 @@ export const UsersPage: React.FC = () => {
                       <UserX className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                ) : (
-                  <span className="text-[11px] text-slate-500 font-medium">
-                    {u.is_active ? 'Cuenta Activa' : 'Desactivada'}
-                  </span>
+                ) : u.id !== currentUserId && (
+                  (u.is_active && u.approval_status !== 'REJECTED') ? (
+                    <button
+                      type="button"
+                      onClick={() => handleRevokeAccess(u)}
+                      className="px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500 text-rose-300 hover:text-white border border-rose-500/30 font-bold text-xs flex items-center gap-1"
+                    >
+                      <UserX className="w-3.5 h-3.5" />
+                      Quitar Acceso
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleRestoreAccess(u)}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500 text-emerald-300 hover:text-white border border-emerald-500/30 font-bold text-xs flex items-center gap-1"
+                    >
+                      <UserCheck className="w-3.5 h-3.5" />
+                      Restablecer
+                    </button>
+                  )
                 )}
               </div>
             </div>
@@ -758,34 +834,25 @@ export const UsersPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 pt-1">
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Aprobación</label>
-                  <select
-                    value={editApprovalStatus}
-                    onChange={(e) => setEditApprovalStatus(e.target.value as any)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
-                  >
-                    <option value="APPROVED">Autorizado</option>
-                    <option value="PENDING">Pendiente</option>
-                    <option value="REJECTED">Rechazado</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Estado de Cuenta</label>
-                  <button
-                    type="button"
-                    onClick={() => setEditIsActive(!editIsActive)}
-                    className={`w-full p-2.5 rounded-xl border font-bold text-xs transition-all flex items-center justify-center gap-1.5 ${
-                      editIsActive
-                        ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                        : 'bg-rose-500/20 border-rose-500/40 text-rose-300'
-                    }`}
-                  >
-                    {editIsActive ? '✓ Cuenta Activa' : '✕ Desactivada'}
-                  </button>
-                </div>
+              <div className="pt-1">
+                <label className="block text-slate-400 font-semibold mb-1.5">Acceso al Sistema y Operaciones</label>
+                <button
+                  type="button"
+                  onClick={() => setEditIsActive(!editIsActive)}
+                  className={`w-full p-3 rounded-xl border font-bold text-xs transition-all flex items-center justify-between px-4 min-h-[44px] ${
+                    editIsActive
+                      ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20'
+                      : 'bg-rose-500/15 border-rose-500/30 text-rose-300 hover:bg-rose-500/20'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    {editIsActive ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <UserX className="w-4 h-4 text-rose-400" />}
+                    <span>{editIsActive ? '✓ Acceso Permitido (Cuenta Activa)' : '✕ Acceso Revocado (Cuenta Desactivada)'}</span>
+                  </span>
+                  <span className="text-[11px] underline opacity-90 font-medium">
+                    {editIsActive ? 'Clic para Quitar Acceso' : 'Clic para Conceder Acceso'}
+                  </span>
+                </button>
               </div>
 
               <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-800/80">

@@ -1657,13 +1657,30 @@ export const api = {
       if (res.ok) {
         return await res.json();
       }
-    } catch {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Error al actualizar usuario');
+    } catch (err: any) {
+      if (err.message && !err.message.includes('Failed to fetch')) {
+        throw err;
+      }
       // offline fallback
+      return {
+        id: userId,
+        ...data
+      } as User;
     }
-    return {
-      id: userId,
-      ...data
-    } as User;
+  },
+
+  async revokeUserAccess(userId: string): Promise<any> {
+    const res = await fetch(`/api/v1/users/${userId}`, {
+      method: 'DELETE',
+      headers: authHeaders({ 'Content-Type': 'application/json' })
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Error al revocar acceso al usuario');
+    }
+    return await res.json();
   },
 
   // 6. Audit & Cash Sessions

@@ -1021,10 +1021,10 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
         await db.commit()
         await db.refresh(user)
 
-    if not user.is_active:
+    if not user.is_active or user.approval_status == "REJECTED":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="La cuenta se encuentra inactiva. Contacte al administrador."
+            detail="Tu acceso a este negocio ha sido revocado o la cuenta se encuentra inactiva. Contacte al administrador."
         )
 
     jwt_token, session, pref = await _create_user_session_and_get_prefs(user, request, db)
@@ -1115,10 +1115,10 @@ async def login_standard(payload: StandardLoginRequest, request: Request, db: As
                 detail="Credenciales de acceso inválidas"
             )
 
-    if not user.is_active:
+    if not user.is_active or user.approval_status == "REJECTED":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="La cuenta se encuentra inactiva. Contacte al administrador."
+            detail="Tu acceso a este negocio ha sido revocado o la cuenta se encuentra inactiva. Contacte al administrador."
         )
 
     jwt_token, session, pref = await _create_user_session_and_get_prefs(user, request, db)
@@ -2772,15 +2772,29 @@ async def update_user(
         else:
             user.branch_id = None
     if "is_active" in payload:
-        user.is_active = bool(payload["is_active"])
-    if "approval_status" in payload and payload["approval_status"]:
+        new_active = bool(payload["is_active"])
+        user.is_active = new_active
+        if not new_active:
+            user.approval_status = "REJECTED"
+        elif "approval_status" not in payload:
+            user.approval_status = "APPROVED"
+    elif "approval_status" in payload and payload["approval_status"]:
         user.approval_status = payload["approval_status"]
         if payload["approval_status"] == "APPROVED":
             user.is_active = True
             if owner_biz_id:
                 user.business_id = owner_biz_id
-        elif payload["approval_status"] == "REJECTED":
+        elif payload["approval_status"] in ("REJECTED", "REVOKED"):
             user.is_active = False
+
+    # Si se desactiva el usuario o se revoca el acceso, invalidar sesiones activas de inmediato
+    if not user.is_active:
+        user.approval_status = "REJECTED"
+        await db.execute(
+            update(UserSessionModel)
+            .where(UserSessionModel.user_id == user.id)
+            .values(is_active=False)
+        )
 
     user.updated_at = datetime.utcnow()
     db.add(user)
@@ -2814,6 +2828,46 @@ async def update_user(
         "message": "Usuario y permisos actualizados exitosamente"
     }
 
+@api_router.delete("/users/{user_id}")
+async def revoke_or_delete_user(
+    user_id: str,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Revoca inmediatamente el acceso de un usuario/colaborador al sistema e invalida sus sesiones.
+    """
+    verify_system_operational()
+    current_user = await get_optional_current_user(authorization, db)
+    if current_user and current_user.id == user_id:
+        raise HTTPException(status_code=400, detail="No puedes revocar tu propio acceso como dueño.")
+
+    user_res = await db.execute(select(UserModel).where(UserModel.id == user_id))
+    user = user_res.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+    user.is_active = False
+    user.approval_status = "REJECTED"
+    user.updated_at = datetime.utcnow()
+    db.add(user)
+
+    await db.execute(
+        update(UserSessionModel)
+        .where(UserSessionModel.user_id == user.id)
+        .values(is_active=False)
+    )
+    await db.commit()
+    await db.refresh(user)
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "is_active": False,
+        "approval_status": "REJECTED",
+        "message": f"Acceso revocado exitosamente para {user.full_name}."
+    }
+
 @api_router.post("/users/approval")
 async def user_approval(
     payload: dict = Body(...),
@@ -2834,8 +2888,8 @@ async def user_approval(
     user_res = await db.execute(select(UserModel).where(UserModel.id == user_id))
     user = user_res.scalar_one_or_none()
     if user:
-        user.approval_status = status_val
         if status_val == "APPROVED":
+            user.approval_status = "APPROVED"
             user.is_active = True
             if owner_biz_id:
                 user.business_id = owner_biz_id
@@ -2843,8 +2897,14 @@ async def user_approval(
                 b_chk = await db.execute(select(BranchModel.id).where(BranchModel.id == user.branch_id))
                 if not b_chk.scalar_one_or_none():
                     user.branch_id = None
-        elif status_val == "REJECTED":
+        elif status_val in ("REJECTED", "REVOKED"):
+            user.approval_status = "REJECTED"
             user.is_active = False
+            await db.execute(
+                update(UserSessionModel)
+                .where(UserSessionModel.user_id == user.id)
+                .values(is_active=False)
+            )
         user.updated_at = datetime.utcnow()
         db.add(user)
         if user.business_id:
@@ -2862,9 +2922,10 @@ async def user_approval(
         await db.refresh(user)
     return {
         "user_id": user_id,
-        "approval_status": status_val,
+        "approval_status": user.approval_status if user else status_val,
+        "is_active": user.is_active if user else False,
         "business_id": user.business_id if user else None,
-        "message": "Estado de aprobación actualizado correctamente"
+        "message": "Acceso revocado correctamente" if status_val in ("REJECTED", "REVOKED") else "Estado de aprobación actualizado correctamente"
     }
 
 # Staff / Employee Pairing DB & Endpoints (Misma lógica de vinculación que las cajas)
