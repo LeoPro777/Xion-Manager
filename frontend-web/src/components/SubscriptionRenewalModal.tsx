@@ -125,6 +125,7 @@ export const SubscriptionRenewalModal: React.FC<SubscriptionRenewalModalProps> =
   const [paymentDate, setPaymentDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [receiptPreview, setReceiptPreview] = useState<string>('');
   const [receiptFileName, setReceiptFileName] = useState<string>('');
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [notes, setNotes] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -288,6 +289,7 @@ export const SubscriptionRenewalModal: React.FC<SubscriptionRenewalModalProps> =
         setErrorMessage('El comprobante no debe superar los 5 MB.');
         return;
       }
+      setReceiptFile(file);
       setReceiptFileName(file.name);
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -318,6 +320,20 @@ export const SubscriptionRenewalModal: React.FC<SubscriptionRenewalModalProps> =
         ? `${activeAccount.bank_name || activeAccount.method.toUpperCase()} - ${activeAccount.account_holder}`
         : 'Xion Pay Oficial';
 
+      // Subir primero el comprobante a Supabase Storage a través de FastAPI
+      let finalReceiptUrl: string | undefined = receiptPreview || undefined;
+      if (receiptFile) {
+        try {
+          const uploaded = await api.uploadPaymentReceipt(receiptFile);
+          if (uploaded && uploaded.receipt_url) {
+            finalReceiptUrl = uploaded.receipt_url;
+          }
+        } catch (uploadErr) {
+          // Continuar con el preview en caso de fallo de red
+          console.warn('Fallback a preview de comprobante:', uploadErr);
+        }
+      }
+
       const payload: CreatePaymentReportDTO = {
         order_id: `SUB-${currentPlan.code}-${Date.now().toString().slice(-6)}`,
         concept: `Renovación Suscripción: ${currentPlan.name} (${cycleLabels[billingCycle]}) + ${extraRegistersCount} Cajas Add-on`,
@@ -332,7 +348,7 @@ export const SubscriptionRenewalModal: React.FC<SubscriptionRenewalModalProps> =
         currency: currency,
         exchange_rate: rate,
         payment_date: paymentDate,
-        receipt_url: receiptPreview || undefined,
+        receipt_url: finalReceiptUrl,
         notes: notes.trim() ? `[Suscripción ${currentPlan.name}] ${notes.trim()}` : `[Suscripción Xion Manager - ${currentPlan.name}]`
       };
 

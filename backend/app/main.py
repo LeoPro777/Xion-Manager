@@ -22,11 +22,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static Files for Uploads (Payment Methods)
+# Optional Local Static Files for Legacy Uploads (Development / Offline Fallback)
 BASE_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPLOAD_PAYMENT_METHODS_DIR = os.path.join(BASE_BACKEND_DIR, "data", "uploads", "payment_methods")
-os.makedirs(UPLOAD_PAYMENT_METHODS_DIR, exist_ok=True)
-app.mount("/static/payment_methods", StaticFiles(directory=UPLOAD_PAYMENT_METHODS_DIR), name="payment_method_images")
+try:
+    os.makedirs(UPLOAD_PAYMENT_METHODS_DIR, exist_ok=True)
+    if os.path.isdir(UPLOAD_PAYMENT_METHODS_DIR):
+        app.mount("/static/payment_methods", StaticFiles(directory=UPLOAD_PAYMENT_METHODS_DIR), name="payment_method_images")
+except Exception:
+    # Ignorado de forma segura en contenedores efímeros de producción (Render)
+    pass
 
 # Domain Exception Handler
 app.add_exception_handler(AppException, app_exception_handler)

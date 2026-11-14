@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Package, 
   ArrowRightLeft, 
@@ -26,7 +26,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { api } from '../services/api';
+import { api, resolveImageUrl } from '../services/api';
 import { ProductInventory, Branch, ComboItem, CategoryItem, StockAdjustmentDTO } from '../types';
 
 export const InventoryPage: React.FC = () => {
@@ -99,6 +99,24 @@ export const InventoryPage: React.FC = () => {
   const [formMinStockAlert, setFormMinStockAlert] = useState('5');
   const [formImageUrl, setFormImageUrl] = useState('');
   const [formComboItems, setFormComboItems] = useState<ComboItem[]>([]);
+  const [isUploadingProductImage, setIsUploadingProductImage] = useState(false);
+  const productImageInputRef = useRef<HTMLInputElement>(null);
+
+  const handleProductImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingProductImage(true);
+    try {
+      const res = await api.uploadProductImage(file, formImageUrl);
+      if (res.image_url) {
+        setFormImageUrl(res.image_url);
+      }
+    } catch (err) {
+      console.error('Error al subir imagen de producto:', err);
+    } finally {
+      setIsUploadingProductImage(false);
+    }
+  };
 
   useEffect(() => {
     loadData();
@@ -755,7 +773,7 @@ export const InventoryPage: React.FC = () => {
                     <td className="p-3.5">
                       <div className="flex items-center gap-2.5">
                         {item.image_url ? (
-                          <img src={item.image_url} alt={item.name} className="w-9 h-9 rounded-lg object-cover border border-slate-800 shrink-0" />
+                          <img src={resolveImageUrl(item.image_url, 'thumb') || item.image_url} alt={item.name} className="w-9 h-9 rounded-lg object-cover border border-slate-800 shrink-0" />
                         ) : (
                           <div className="w-9 h-9 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0 text-slate-500">
                             <Package className="w-4 h-4" />
@@ -867,7 +885,7 @@ export const InventoryPage: React.FC = () => {
 
                   {item.image_url ? (
                     <div className="h-32 w-full rounded-xl overflow-hidden mb-3 bg-slate-900">
-                      <img src={item.image_url} alt={item.name} className="w-full h-full object-cover" />
+                      <img src={resolveImageUrl(item.image_url, 'medium') || item.image_url} alt={item.name} className="w-full h-full object-cover" />
                     </div>
                   ) : (
                     <div className="h-24 w-full rounded-xl mb-3 bg-slate-900/60 border border-slate-800/80 flex items-center justify-center text-slate-600">
@@ -1168,14 +1186,52 @@ export const InventoryPage: React.FC = () => {
               )}
 
               <div>
-                <label className="block text-slate-400 font-semibold mb-1">URL Imagen del Producto</label>
-                <input 
-                  type="text" 
-                  value={formImageUrl} 
-                  onChange={e => setFormImageUrl(e.target.value)}
-                  placeholder="https://ejemplo.com/imagen.jpg"
-                  className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100"
-                />
+                <label className="block text-slate-400 font-semibold mb-1 text-xs">
+                  Imagen del Producto (WebP optimizado en Supabase Storage)
+                </label>
+                <div className="flex items-center gap-3">
+                  <div className="w-16 h-16 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center overflow-hidden shrink-0">
+                    {formImageUrl ? (
+                      <img 
+                        src={resolveImageUrl(formImageUrl, 'thumb') || formImageUrl} 
+                        alt="Preview" 
+                        className="w-full h-full object-cover" 
+                      />
+                    ) : (
+                      <Package className="w-6 h-6 text-slate-600" />
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-1.5">
+                    <div className="flex gap-2">
+                      <input 
+                        type="text" 
+                        value={formImageUrl} 
+                        onChange={e => setFormImageUrl(e.target.value)}
+                        placeholder="https://... o selecciona un archivo"
+                        className="flex-1 bg-slate-900 border border-slate-800 rounded-xl p-2 text-xs text-slate-100 font-mono"
+                      />
+                      <input
+                        type="file"
+                        ref={productImageInputRef}
+                        onChange={handleProductImageFileChange}
+                        accept="image/*"
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => productImageInputRef.current?.click()}
+                        disabled={isUploadingProductImage}
+                        className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 border border-slate-700 shrink-0 active:scale-95 transition-all"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>{isUploadingProductImage ? 'Subiendo...' : 'Subir'}</span>
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-slate-500">
+                      El servidor redimensiona y convierte en memoria a WebP antes de persistir en Supabase.
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <div className="pt-3 border-t border-slate-800 flex justify-end gap-3">

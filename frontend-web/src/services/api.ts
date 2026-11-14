@@ -1867,12 +1867,12 @@ export const api = {
     mockPaymentMethods = mockPaymentMethods.filter(m => m.id !== id);
   },
 
-  async uploadPaymentMethodImage(file: File, oldImageId?: string | null): Promise<{ image_id: string }> {
+  async uploadPaymentMethodImage(file: File, oldImageId?: string | null): Promise<{ image_id: string; image_url?: string }> {
     try {
       const formData = new FormData();
       formData.append('file', file);
       const url = oldImageId 
-        ? `/api/v1/payment-methods/image?old_image_id=${oldImageId}`
+        ? `/api/v1/payment-methods/image?old_image_id=${encodeURIComponent(oldImageId)}`
         : `/api/v1/payment-methods/image`;
       const res = await fetch(url, {
         method: 'POST',
@@ -1885,6 +1885,46 @@ export const api = {
       // Offline fallback
     }
     return { image_id: 'custom_' + Math.random().toString(36).substring(2, 9) };
+  },
+
+  async uploadProductImage(file: File, oldImageUrl?: string | null): Promise<{ image_url: string; thumb_url?: string }> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const url = oldImageUrl 
+        ? `/api/v1/inventory/products/image?old_image_url=${encodeURIComponent(oldImageUrl)}`
+        : `/api/v1/inventory/products/image`;
+      const res = await fetch(url, {
+        method: 'POST',
+        body: formData
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // Offline fallback
+    }
+    return { image_url: URL.createObjectURL(file) };
+  },
+
+  async uploadPaymentReceipt(file: File, oldReceiptUrl?: string | null): Promise<{ receipt_url: string; thumb_url?: string }> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const url = oldReceiptUrl 
+        ? `/api/v1/payment-reports/receipt?old_receipt_url=${encodeURIComponent(oldReceiptUrl)}`
+        : `/api/v1/payment-reports/receipt`;
+      const res = await fetch(url, {
+        method: 'POST',
+        body: formData
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // Offline fallback
+    }
+    return { receipt_url: URL.createObjectURL(file) };
   },
 
   // 11. System Preferences (Xion-POS Parity)
@@ -2274,4 +2314,40 @@ export function applySystemPreferences(prefs: SystemPreferences) {
 
   styleTag.innerHTML = cssLines.join('\n');
 }
+
+/**
+ * Normaliza y resuelve URLs de imágenes en todo el frontend.
+ * - Detecta automáticamente si la URL proviene de Supabase Storage o es externa (http/https)
+ *   y la consume directamente sin prefijos locales.
+ * - Soporta resolución de variantes WebP ('medium', 'thumb', 'original').
+ * - Preserva compatibilidad con hashes locales antiguos (/static/payment_methods/...).
+ */
+export function resolveImageUrl(
+  urlOrId?: string | null,
+  variant: 'medium' | 'thumb' | 'original' = 'medium'
+): string | null {
+  if (!urlOrId) return null;
+  const trimmed = urlOrId.trim();
+  if (!trimmed) return null;
+
+  // 1. URLs remotas completas (Supabase Storage o CDN externo)
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    if (variant === 'thumb' && trimmed.includes('/medium_')) {
+      return trimmed.replace('/medium_', '/thumb_');
+    }
+    if (variant === 'medium' && trimmed.includes('/thumb_')) {
+      return trimmed.replace('/thumb_', '/medium_');
+    }
+    return trimmed;
+  }
+
+  // 2. Data URLs (previews en memoria) o rutas estáticas absolutas
+  if (trimmed.startsWith('data:') || trimmed.startsWith('/')) {
+    return trimmed;
+  }
+
+  // 3. Hash local legacy de métodos de pago (ej. "65cc43a8116c")
+  return `/static/payment_methods/${variant}_${trimmed}.webp`;
+}
+
 

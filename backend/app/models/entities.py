@@ -229,7 +229,7 @@ class Product(Base):
     tax_type: Mapped[str] = mapped_column(String(20), default="vat")
     unit_measure: Mapped[str] = mapped_column(String(20), default="UND")
     min_stock_alert: Mapped[float] = mapped_column(Numeric(12, 2), default=5.0)
-    image_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    image_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -374,7 +374,7 @@ class PaymentMethod(Base):
     allow_decimals: Mapped[bool] = mapped_column(Boolean, default=True)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    image_url: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    image_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

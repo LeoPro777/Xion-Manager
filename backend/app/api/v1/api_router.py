@@ -27,6 +27,10 @@ from app.schemas.schemas import (
 from app.services.image_service import (
     save_and_process_payment_method_image,
     delete_payment_method_images,
+    save_and_process_product_image,
+    delete_product_images,
+    save_and_process_receipt_image,
+    delete_image_variants,
     process_and_upload_image
 )
 from app.services.storage_service import storage_service
@@ -2455,6 +2459,15 @@ async def create_product(payload: ProductCreate):
     inventory_db.insert(0, new_p)
     return new_p
 
+@api_router.post("/inventory/products/image")
+async def upload_product_image_endpoint(
+    file: UploadFile = File(...),
+    old_image_url: Optional[str] = Query(None)
+):
+    """Sube y optimiza la imagen de un producto en memoria a Supabase Storage."""
+    verify_system_operational()
+    return await save_and_process_product_image(file, old_image_url)
+
 @api_router.put("/inventory/products/{product_id}")
 async def update_product(product_id: str, payload: ProductUpdate):
     verify_system_operational()
@@ -2463,6 +2476,11 @@ async def update_product(product_id: str, payload: ProductUpdate):
             data = payload.model_dump(exclude_unset=True)
             if "combo_items" in data and data["combo_items"] is not None:
                 data["combo_items"] = [c if isinstance(c, dict) else c.model_dump() for c in data["combo_items"]]
+            
+            # Limpieza en Supabase Storage si se reemplaza la imagen anterior
+            if "image_url" in data and data["image_url"] != p.get("image_url") and p.get("image_url"):
+                delete_product_images(p["image_url"])
+
             inventory_db[i].update(data)
             return inventory_db[i]
     return {"message": "Producto no encontrado"}
@@ -2471,6 +2489,12 @@ async def update_product(product_id: str, payload: ProductUpdate):
 async def delete_product(product_id: str):
     verify_system_operational()
     global inventory_db
+    for p in inventory_db:
+        if p["id"] == product_id or p.get("product_id") == product_id:
+            if p.get("image_url"):
+                delete_product_images(p["image_url"])
+            break
+
     inventory_db = [p for p in inventory_db if p["id"] != product_id and p.get("product_id") != product_id]
     return {"message": "Producto eliminado exitosamente"}
 
@@ -4161,6 +4185,14 @@ async def reject_payment_report(report_id: str, payload: PaymentReportRejectSche
 
     return report
 
+@api_router.post("/payment-reports/receipt")
+async def upload_payment_receipt_endpoint(
+    file: UploadFile = File(...),
+    old_receipt_url: Optional[str] = Query(None)
+):
+    """Sube y optimiza en memoria el comprobante de pago a Supabase Storage."""
+    return await save_and_process_receipt_image(file, old_receipt_url)
+
 # Legacy billing payment report endpoint (backward compatibility)
 @api_router.post("/billing/report-payment", response_model=PaymentReportAccepted, status_code=status.HTTP_202_ACCEPTED)
 async def report_payment(
@@ -4171,9 +4203,46 @@ async def report_payment(
     amount: float = Form(...),
     receipt_file: Optional[UploadFile] = File(None)
 ):
+    receipt_url = None
+    if receipt_file:
+        try:
+            res = await save_and_process_receipt_image(receipt_file)
+            receipt_url = res.get("receipt_url")
+        except Exception as e:
+            logger.warning(f"No se pudo guardar el comprobante en Supabase Storage: {e}")
+
+    report_id = f"rep-{int(datetime.utcnow().timestamp())}"
+    global payment_reports_db
+    payment_reports_db.insert(0, {
+        "id": report_id,
+        "business_id": "biz-101",
+        "order_id": f"SUB-{reference_number or int(datetime.utcnow().timestamp())}",
+        "concept": f"Renovación Suscripción ({payment_method_type})",
+        "payment_method": payment_method_type,
+        "origin_bank": issuing_bank,
+        "dest_bank": "Xion Pay Oficial",
+        "payer_name": None,
+        "payer_id_or_phone": None,
+        "payer_email": None,
+        "reference_number": reference_number,
+        "amount_paid": amount,
+        "currency": "USD" if payment_method_type in ("zelle", "binance_pay") else "VES",
+        "exchange_rate": 37.5,
+        "amount_base_equivalent": amount,
+        "receipt_url": receipt_url,
+        "status": "pending",
+        "rejection_reason": None,
+        "notes": "[Vía Formulario de Facturación]",
+        "verified_by": None,
+        "verified_by_user_id": None,
+        "verified_at": None,
+        "payment_date": str(payment_date),
+        "created_at": datetime.utcnow().isoformat()
+    })
+
     return {
         "message": "Tu reporte de pago ha sido recibido con éxito y está en proceso de verificación.",
-        "report_id": f"rep-{int(datetime.utcnow().timestamp())}",
+        "report_id": report_id,
         "status": "pending"
     }
 

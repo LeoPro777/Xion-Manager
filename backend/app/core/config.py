@@ -23,10 +23,13 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "xion_manager_db"
     POSTGRES_SSL: bool = True
 
-    # Supabase API Settings (PostgREST / Storage / Auth)
+    # Supabase API & Storage Settings
+    STORAGE_BACKEND: str = "supabase"  # "supabase" | "r2" | "local"
     SUPABASE_URL: Optional[str] = None
     SUPABASE_KEY: Optional[str] = None
     SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
+    SUPABASE_STORAGE_BUCKET: str = "xion-media"
+    SUPABASE_STORAGE_MAX_FILE_SIZE_MB: int = 10
 
     # SQLite local fallback: False por defecto para forzar uso prioritario de PostgreSQL / Supabase
     USE_SQLITE_FALLBACK: bool = False

@@ -23,7 +23,7 @@ import {
   Layers,
   ArrowRight
 } from 'lucide-react';
-import { api } from '../services/api';
+import { api, resolveImageUrl } from '../services/api';
 import { PaymentMethod, CreatePaymentMethodDTO, UpdatePaymentMethodDTO } from '../types';
 
 export const PaymentMethodsPage: React.FC = () => {
@@ -105,7 +105,7 @@ export const PaymentMethodsPage: React.FC = () => {
     setFormIsActive(method.is_active);
     setFormImageUrl(method.image_url || null);
     setImageFile(null);
-    setImagePreview(method.image_url ? `/static/payment_methods/medium_${method.image_url}.webp` : null);
+    setImagePreview(resolveImageUrl(method.image_url, 'medium'));
     setShowModal(true);
   };
 
@@ -186,7 +186,7 @@ export const PaymentMethodsPage: React.FC = () => {
 
       if (imageFile) {
         const uploadRes = await api.uploadPaymentMethodImage(imageFile, formImageUrl);
-        finalImageUrl = uploadRes.image_id;
+        finalImageUrl = uploadRes.image_url || uploadRes.image_id;
       }
 
       if (editingMethod) {
@@ -476,9 +476,7 @@ export const PaymentMethodsPage: React.FC = () => {
         /* GRID CARDS VIEW */
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {filteredMethods.map((method) => {
-            const imageUrl = method.image_url 
-              ? `/static/payment_methods/medium_${method.image_url}.webp` 
-              : null;
+            const imageUrl = resolveImageUrl(method.image_url, 'medium');
 
             return (
               <div
@@ -642,9 +640,7 @@ export const PaymentMethodsPage: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-slate-300">
                 {filteredMethods.map((method) => {
-                  const thumbUrl = method.image_url 
-                    ? `/static/payment_methods/thumb_${method.image_url}.webp` 
-                    : null;
+                  const thumbUrl = resolveImageUrl(method.image_url, 'thumb');
 
                   return (
                     <tr 
