@@ -845,13 +845,30 @@ async def get_current_user_and_session(
     user_res = await db.execute(select(UserModel).where(UserModel.id == user_id, UserModel.is_active == True))
     user = user_res.scalar_one_or_none()
     if not user:
+        if claims.get("is_provisional") or str(user_id).startswith("tmp-"):
+            user = UserModel(
+                id=user_id,
+                email=claims.get("email", ""),
+                full_name=claims.get("full_name", ""),
+                phone=claims.get("phone", ""),
+                avatar_url=claims.get("avatar_url"),
+                role=claims.get("role", "OWNER"),
+                business_id=None,
+                branch_id=None,
+                approval_status="APPROVED",
+                is_active=True
+            )
+            setattr(user, "is_provisional", True)
+            if claims.get("pwd_hash"):
+                user.hashed_password = claims["pwd_hash"]
+            return user, None
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuario no encontrado o inactivo."
         )
 
     session = None
-    if jti:
+    if jti and not getattr(user, "is_provisional", False) and not str(user.id).startswith("tmp-"):
         sess_res = await db.execute(
             select(UserSessionModel).where(
                 UserSessionModel.token_jti == jti,
@@ -882,6 +899,7 @@ async def get_optional_current_user(
     """
     Retorna el usuario actual si el header Authorization Bearer es provisto y válido.
     Permite aislamiento multi-tenant en endpoints públicos u opcionales.
+    Soporta usuarios provisionales en memoria (no persistidos en la BD) durante el proceso de onboarding.
     """
     if not authorization or not authorization.startswith("Bearer "):
         return None
@@ -892,7 +910,27 @@ async def get_optional_current_user(
             return None
         user_id = claims["sub"]
         user_res = await db.execute(select(UserModel).where(UserModel.id == user_id, UserModel.is_active == True))
-        return user_res.scalar_one_or_none()
+        found = user_res.scalar_one_or_none()
+        if found:
+            return found
+        if claims.get("is_provisional") or str(user_id).startswith("tmp-"):
+            transient_user = UserModel(
+                id=user_id,
+                email=claims.get("email", ""),
+                full_name=claims.get("full_name", ""),
+                phone=claims.get("phone", ""),
+                avatar_url=claims.get("avatar_url"),
+                role=claims.get("role", "OWNER"),
+                business_id=None,
+                branch_id=None,
+                approval_status="APPROVED",
+                is_active=True
+            )
+            setattr(transient_user, "is_provisional", True)
+            if claims.get("pwd_hash"):
+                setattr(transient_user, "_pwd_hash", claims["pwd_hash"])
+            return transient_user
+        return None
     except Exception:
         return None
 
@@ -927,32 +965,61 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
     result = await db.execute(select(UserModel).where(UserModel.email == email))
     user = result.scalar_one_or_none()
 
-    is_new_user = False
     if not user:
-        is_new_user = True
-        # El usuario nuevo se crea sin empresa (business_id = None).
-        # La empresa se registra en la BD únicamente cuando completa el formulario de Dueño (/onboarding/complete).
-        # Si es otro usuario (colaborador), se vinculará al negocio del Dueño que lo autorice.
-        user = UserModel(
-            id=f"usr-{uuid.uuid4().hex[:12]}",
-            email=email,
-            hashed_password=get_password_hash("oauth2-google-managed"),
-            full_name=name,
-            avatar_url=google_data.get("picture"),
-            role="OWNER",
-            business_id=None,
-            approval_status="APPROVED",
-            is_active=True
-        )
+        # USUARIO NUEVO: No se registra en la base de datos hasta que complete el formulario
+        # o sea autorizado por un Dueño, garantizando la consistencia relacional de la BD.
+        tmp_id = f"tmp-{uuid.uuid4().hex[:12]}"
+        tmp_token_claims = {
+            "sub": tmp_id,
+            "email": email,
+            "role": "OWNER",
+            "full_name": name,
+            "avatar_url": google_data.get("picture"),
+            "pwd_hash": get_password_hash("oauth2-google-managed"),
+            "is_provisional": True,
+            "jti": str(uuid.uuid4())
+        }
+        provisional_jwt = create_access_token(tmp_token_claims)
+
+        return {
+            "access_token": provisional_jwt,
+            "token_type": "bearer",
+            "session_id": f"sess-{uuid.uuid4().hex[:12]}",
+            "is_new_user": True,
+            "user": {
+                "id": tmp_id,
+                "email": email,
+                "full_name": name,
+                "role": "OWNER",
+                "business_id": None,
+                "branch_id": None,
+                "branch_name": None,
+                "approval_status": "APPROVED",
+                "avatar_url": google_data.get("picture"),
+                "is_active": True,
+                "is_new_user": True,
+                "onboarding_completed": False,
+                "last_login_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.utcnow().isoformat()
+            },
+            "preferences": {
+                "theme": "dark",
+                "language": "es",
+                "default_currency": "USD",
+                "sound_enabled": True,
+                "table_rows_per_page": 25,
+                "compact_mode": False,
+                "notifications": {"push": True, "email": True, "inventory_alerts": True},
+                "pos_quick_keys": {"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
+                "ui_preferences": {"sidebar_collapsed": False}
+            }
+        }
+
+    if google_data.get("picture") and not user.avatar_url:
+        user.avatar_url = google_data.get("picture")
         db.add(user)
         await db.commit()
         await db.refresh(user)
-    else:
-        if google_data.get("picture") and not user.avatar_url:
-            user.avatar_url = google_data.get("picture")
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
 
     if not user.is_active:
         raise HTTPException(
@@ -961,19 +1028,13 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
         )
 
     jwt_token, session, pref = await _create_user_session_and_get_prefs(user, request, db)
-
-    # En Google OAuth: Solo es nuevo si no existía previamente en la base de datos
-    onboarding_completed = False if is_new_user else True
-    if is_new_user:
-        onboarding_completed = await _check_user_onboarding_completed(user, db)
-    elif not user.business_id and user.approval_status != "APPROVED":
-        onboarding_completed = False
+    onboarding_completed = await _check_user_onboarding_completed(user, db)
 
     return {
         "access_token": jwt_token,
         "token_type": "bearer",
         "session_id": session.id,
-        "is_new_user": is_new_user,
+        "is_new_user": False,
         "user": {
             "id": user.id,
             "email": user.email,
@@ -985,7 +1046,7 @@ async def login_google(payload: GoogleAuthRequest, request: Request, db: AsyncSe
             "approval_status": user.approval_status,
             "avatar_url": user.avatar_url,
             "is_active": user.is_active,
-            "is_new_user": is_new_user,
+            "is_new_user": False,
             "onboarding_completed": onboarding_completed,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "created_at": user.created_at.isoformat() if user.created_at else None
@@ -1105,7 +1166,9 @@ async def login_standard(payload: StandardLoginRequest, request: Request, db: As
 @api_router.post("/auth/register", response_model=AuthTokenResponse)
 async def register_user(payload: RegisterUserRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """
-    Registro de nuevos usuarios. Crea la cuenta inicial con rol OWNER, sesión activa y preferencias por defecto.
+    Registro de nuevos usuarios.
+    Si el usuario es nuevo no se inserta en la base de datos hasta que complete el formulario
+    o sea autorizado en el negocio correspondiente, garantizando integridad y evitando cuentas huérfanas.
     """
     email = payload.email.lower().strip()
     result = await db.execute(select(UserModel).where(UserModel.email == email))
@@ -1116,58 +1179,52 @@ async def register_user(payload: RegisterUserRequest, request: Request, db: Asyn
             detail="Ya existe una cuenta registrada con este correo electrónico."
         )
 
-    # El usuario nuevo se registra sin empresa (business_id = None).
-    # La empresa se registra en la BD únicamente cuando completa el formulario de Dueño (/onboarding/complete).
-    # Si es otro usuario (colaborador), se vinculará al negocio del Dueño que lo autorice.
-    user = UserModel(
-        id=f"usr-{uuid.uuid4().hex[:12]}",
-        email=email,
-        hashed_password=get_password_hash(payload.password),
-        full_name=payload.full_name,
-        phone=payload.phone,
-        role="OWNER",
-        business_id=None,
-        approval_status="APPROVED",
-        is_active=True
-    )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-
-    jwt_token, session, pref = await _create_user_session_and_get_prefs(user, request, db)
+    tmp_id = f"tmp-{uuid.uuid4().hex[:12]}"
+    pwd_hash = get_password_hash(payload.password)
+    token_claims = {
+        "sub": tmp_id,
+        "email": email,
+        "role": "OWNER",
+        "full_name": payload.full_name,
+        "phone": payload.phone,
+        "pwd_hash": pwd_hash,
+        "is_provisional": True,
+        "jti": str(uuid.uuid4())
+    }
+    jwt_token = create_access_token(token_claims)
 
     return {
         "access_token": jwt_token,
         "token_type": "bearer",
-        "session_id": session.id,
+        "session_id": f"sess-{uuid.uuid4().hex[:12]}",
         "is_new_user": True,
         "user": {
-            "id": user.id,
-            "email": user.email,
-            "full_name": user.full_name,
-            "phone": user.phone,
-            "role": user.role,
-            "business_id": user.business_id,
-            "branch_id": user.branch_id,
-            "branch_name": await _get_branch_name(user.branch_id, db),
-            "approval_status": user.approval_status,
-            "avatar_url": user.avatar_url,
-            "is_active": user.is_active,
+            "id": tmp_id,
+            "email": email,
+            "full_name": payload.full_name,
+            "phone": payload.phone,
+            "role": "OWNER",
+            "business_id": None,
+            "branch_id": None,
+            "branch_name": None,
+            "approval_status": "APPROVED",
+            "avatar_url": None,
+            "is_active": True,
             "is_new_user": True,
             "onboarding_completed": False,
-            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
-            "created_at": user.created_at.isoformat() if user.created_at else None
+            "last_login_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.utcnow().isoformat()
         },
         "preferences": {
-            "theme": pref.theme,
-            "language": pref.language,
-            "default_currency": pref.default_currency,
-            "sound_enabled": pref.sound_enabled,
-            "table_rows_per_page": pref.table_rows_per_page,
-            "compact_mode": pref.compact_mode,
-            "notifications": pref.notifications or {},
-            "pos_quick_keys": pref.pos_quick_keys or {},
-            "ui_preferences": pref.ui_preferences or {}
+            "theme": "dark",
+            "language": "es",
+            "default_currency": "USD",
+            "sound_enabled": True,
+            "table_rows_per_page": 25,
+            "compact_mode": False,
+            "notifications": {"push": True, "email": True, "inventory_alerts": True},
+            "pos_quick_keys": {"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
+            "ui_preferences": {"sidebar_collapsed": False}
         }
     }
 
@@ -1181,13 +1238,14 @@ async def complete_onboarding(
 ):
     """
     Guarda los datos del modal inicial de onboarding respetando el aislamiento multi-tenant:
-    1. Identifica al usuario y su negocio específico mediante user_id o token Bearer.
-    2. Actualiza los datos de la Compañía de ESTE usuario (no sobrescribe otros negocios).
+    1. Identifica al usuario (persistido o provisional). Si es provisional, se inserta en UserModel en esta transacción.
+    2. Actualiza o crea la Compañía de ESTE usuario (no sobrescribe otros negocios).
     3. Configura los parámetros cambiarios y fiscales para este tenant.
     4. Activa el Plan (Trial de 30 días o seleccionado) para este tenant.
+    5. Emite un token JWT definitivo con el ID persistente del usuario.
     """
     user = None
-    if payload.user_id:
+    if payload.user_id and not str(payload.user_id).startswith("tmp-"):
         user_res = await db.execute(select(UserModel).where(UserModel.id == payload.user_id))
         user = user_res.scalar_one_or_none()
     if not user:
@@ -1196,14 +1254,50 @@ async def complete_onboarding(
     if not user:
         raise HTTPException(status_code=400, detail="Usuario no especificado o no autenticado.")
 
-    # 1. Actualizar datos de usuario si se especificó y asegurar rol Dueño
-    if payload.full_name:
-        user.full_name = payload.full_name
-    if payload.phone:
-        user.phone = payload.phone
-    user.role = "OWNER"
-    user.approval_status = "APPROVED"
-    db.add(user)
+    # 1. Asegurar persistencia del usuario si era provisional (no guardado previamente en BD)
+    is_provisional = getattr(user, "is_provisional", False) or str(user.id).startswith("tmp-")
+    if is_provisional:
+        exist_res = await db.execute(select(UserModel).where(UserModel.email == user.email))
+        existing_user = exist_res.scalar_one_or_none()
+        if existing_user:
+            user = existing_user
+            if payload.full_name:
+                user.full_name = payload.full_name
+            if payload.phone:
+                user.phone = payload.phone
+            user.role = "OWNER"
+            user.approval_status = "APPROVED"
+            user.is_active = True
+            db.add(user)
+        else:
+            real_uid = f"usr-{uuid.uuid4().hex[:12]}"
+            hashed_pwd = getattr(user, "hashed_password", None) or get_password_hash("oauth2-google-managed")
+            persisted_user = UserModel(
+                id=real_uid,
+                email=user.email,
+                hashed_password=hashed_pwd,
+                full_name=payload.full_name or user.full_name,
+                phone=payload.phone or user.phone,
+                avatar_url=user.avatar_url,
+                role="OWNER",
+                business_id=None,
+                branch_id=None,
+                approval_status="APPROVED",
+                is_active=True,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            db.add(persisted_user)
+            await db.flush()
+            user = persisted_user
+    else:
+        if payload.full_name:
+            user.full_name = payload.full_name
+        if payload.phone:
+            user.phone = payload.phone
+        user.role = "OWNER"
+        user.approval_status = "APPROVED"
+        db.add(user)
 
     # 2. Actualizar o crear Compañía Principal vinculada exclusivamente a este usuario
     biz = None
@@ -1329,6 +1423,45 @@ async def complete_onboarding(
         .values(business_id=biz.id)
     )
 
+    # 5. Guardar preferencias del usuario si se especificaron
+    pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == user.id))
+    pref = pref_res.scalar_one_or_none()
+    pref_theme = "dark"
+    if payload.preferences:
+        pref_theme = payload.preferences.get("theme_mode") or payload.preferences.get("theme") or "dark"
+    if not pref:
+        pref = UserPreferenceModel(
+            user_id=user.id,
+            business_id=biz.id,
+            theme=pref_theme
+        )
+        db.add(pref)
+    else:
+        pref.business_id = biz.id
+        if payload.preferences:
+            if "theme_mode" in payload.preferences:
+                pref.theme = payload.preferences["theme_mode"]
+            for k, v in payload.preferences.items():
+                if hasattr(UserPreferenceModel, k) and k not in ("id", "user_id"):
+                    setattr(pref, k, v)
+        pref.updated_at = datetime.utcnow()
+        db.add(pref)
+
+    # 6. Crear sesión registrada
+    token_jti = str(uuid.uuid4())
+    session = UserSessionModel(
+        user_id=user.id,
+        business_id=biz.id,
+        token_jti=token_jti,
+        device_info="desktop/browser",
+        ip_address="127.0.0.1",
+        is_active=True,
+        expires_at=datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+        last_activity_at=datetime.utcnow(),
+        created_at=datetime.utcnow()
+    )
+    db.add(session)
+
     await db.commit()
     await db.refresh(biz)
     await db.refresh(user)
@@ -1340,7 +1473,7 @@ async def complete_onboarding(
     global_settings["auto_sync_pos"] = bool(sys_setting.auto_sync_pos)
     global_settings["currency_symbol"] = str(sys_setting.currency_symbol)
 
-    # 4. Activar Plan (Plan Gratuito 30 Días de primero)
+    # 7. Activar Plan (Plan Gratuito 30 Días de primero)
     is_trial = (payload.plan_code or "TRIAL").upper() == "TRIAL"
     trial_days = 30
     trial_ends = datetime.utcnow() + timedelta(days=trial_days)
@@ -1353,9 +1486,9 @@ async def complete_onboarding(
         try:
             lead_data = {
                 "commercial_name": p_comp.trade_name or p_comp.legal_name or "Mi Comercio Xion C.A.",
-                "contact_name": payload.full_name or "Usuario Principal",
-                "email": p_comp.email or "contacto@empresa.com",
-                "phone": p_comp.phone or payload.phone or "+58 414 1234567",
+                "contact_name": payload.full_name or user.full_name or "Usuario Principal",
+                "email": p_comp.email or user.email or "contacto@empresa.com",
+                "phone": p_comp.phone or payload.phone or user.phone or "+58 414 1234567",
                 "tax_id": p_comp.tax_id or "J-50123456-7",
                 "id_doc_type": "J" if "J" in (p_comp.tax_id or "").upper() else "V",
                 "plan_code": "basic",
@@ -1376,36 +1509,23 @@ async def complete_onboarding(
         except Exception:
             pass
 
-    # 5. Guardar preferencias del usuario si se especificaron
-    target_user_id = payload.user_id or user.id
-    if target_user_id:
-        pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == target_user_id))
-        pref = pref_res.scalar_one_or_none()
-        pref_theme = "dark"
-        if payload.preferences:
-            pref_theme = payload.preferences.get("theme_mode") or payload.preferences.get("theme") or "dark"
-        if not pref:
-            pref = UserPreferenceModel(
-                user_id=target_user_id,
-                business_id=biz.id,
-                theme=pref_theme
-            )
-            db.add(pref)
-        else:
-            pref.business_id = biz.id
-            if payload.preferences:
-                if "theme_mode" in payload.preferences:
-                    pref.theme = payload.preferences["theme_mode"]
-                for k, v in payload.preferences.items():
-                    if hasattr(UserPreferenceModel, k) and k not in ("id", "user_id"):
-                        setattr(pref, k, v)
-            pref.updated_at = datetime.utcnow()
-            db.add(pref)
-        await db.commit()
+    # 8. Emitir JWT de producción permanente
+    token_claims = {
+        "sub": user.id,
+        "email": user.email,
+        "role": user.role,
+        "business_id": user.business_id,
+        "full_name": user.full_name,
+        "jti": token_jti
+    }
+    jwt_token = create_access_token(token_claims)
 
     return {
         "status": "success",
         "message": "Configuración inicial y onboarding completados exitosamente.",
+        "access_token": jwt_token,
+        "token_type": "bearer",
+        "session_id": session.id,
         "business": {
             "id": biz.id,
             "legal_name": biz.legal_name,
@@ -1498,6 +1618,45 @@ async def get_user_profile(
     Obtiene el perfil completo del usuario autenticado, sus preferencias activas y su sesión actual.
     """
     user, session = auth_data
+    if getattr(user, "is_provisional", False) or str(user.id).startswith("tmp-"):
+        pref_dict = {
+            "id": f"pref-{user.id}",
+            "user_id": user.id,
+            "business_id": None,
+            "theme": "dark",
+            "language": "es",
+            "default_currency": "USD",
+            "sound_enabled": True,
+            "table_rows_per_page": 25,
+            "compact_mode": False,
+            "notifications": {"push": True, "email": True, "inventory_alerts": True},
+            "pos_quick_keys": {"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
+            "ui_preferences": {"sidebar_collapsed": False},
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        return {
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "full_name": user.full_name,
+                "phone": user.phone,
+                "role": user.role,
+                "business_id": None,
+                "branch_id": None,
+                "branch_name": None,
+                "approval_status": "APPROVED",
+                "avatar_url": user.avatar_url,
+                "is_active": True,
+                "is_new_user": True,
+                "onboarding_completed": False,
+                "last_login_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.utcnow().isoformat()
+            },
+            "preferences": pref_dict,
+            "session": None
+        }
+
     pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == user.id))
     pref = pref_res.scalar_one_or_none()
     if not pref:
@@ -1628,6 +1787,24 @@ async def get_my_preferences(
     Obtiene las preferencias de configuración y UI del usuario autenticado.
     """
     user, _ = auth_data
+    if getattr(user, "is_provisional", False) or str(user.id).startswith("tmp-"):
+        return UserPreferenceResponse(
+            id=f"pref-{user.id}",
+            user_id=user.id,
+            business_id=None,
+            theme="dark",
+            language="es",
+            default_currency="USD",
+            sound_enabled=True,
+            table_rows_per_page=25,
+            compact_mode=False,
+            notifications={"push": True, "email": True, "inventory_alerts": True},
+            pos_quick_keys={"f1": "search", "f2": "customer", "f4": "pay_cash", "f8": "pay_card"},
+            ui_preferences={"sidebar_collapsed": False},
+            created_at=datetime.utcnow().isoformat(),
+            updated_at=datetime.utcnow().isoformat()
+        )
+
     pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == user.id))
     pref = pref_res.scalar_one_or_none()
     if not pref:
@@ -1679,6 +1856,24 @@ async def update_my_preferences(
     Actualiza quirúrgicamente las preferencias y configuraciones del usuario autenticado.
     """
     user, _ = auth_data
+    if getattr(user, "is_provisional", False) or str(user.id).startswith("tmp-"):
+        return {
+            "id": f"pref-{user.id}",
+            "user_id": user.id,
+            "business_id": None,
+            "theme": payload.theme or "dark",
+            "language": payload.language or "es",
+            "default_currency": payload.default_currency or "USD",
+            "sound_enabled": payload.sound_enabled if payload.sound_enabled is not None else True,
+            "table_rows_per_page": payload.table_rows_per_page or 25,
+            "compact_mode": payload.compact_mode if payload.compact_mode is not None else False,
+            "notifications": payload.notifications or {},
+            "pos_quick_keys": payload.pos_quick_keys or {},
+            "ui_preferences": payload.ui_preferences or {},
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+
     pref_res = await db.execute(select(UserPreferenceModel).where(UserPreferenceModel.user_id == user.id))
     pref = pref_res.scalar_one_or_none()
     if not pref:
@@ -2765,14 +2960,17 @@ async def select_collaborator_role(
     if payload.get("phone"):
         current_user.phone = str(payload.get("phone")).strip()
 
+    is_provisional = getattr(current_user, "is_provisional", False) or str(current_user.id).startswith("tmp-")
     current_user.business_id = None
     current_user.branch_id = None
     current_user.role = "CASHIER"
     current_user.approval_status = "PENDING"
-    current_user.updated_at = datetime.utcnow()
-    db.add(current_user)
-    await db.commit()
-    await db.refresh(current_user)
+
+    if not is_provisional:
+        current_user.updated_at = datetime.utcnow()
+        db.add(current_user)
+        await db.commit()
+        await db.refresh(current_user)
 
     import random
     code = payload.get("pairing_code")
@@ -2802,6 +3000,7 @@ async def select_collaborator_role(
     # Persistir en la tabla staff_pairings de PostgreSQL para soporte multi-proceso y resiliencia ante reinicios
     try:
         from sqlalchemy import text
+        db_uid = None if is_provisional else current_user.id
         await db.execute(text("""
             INSERT INTO staff_pairings (pairing_code, user_id, email, full_name, phone, role, status, created_at, expires_at)
             VALUES (:code, :uid, :email, :fname, :phone, 'CASHIER', 'PENDING', :created_at, :expires_at)
@@ -2814,7 +3013,7 @@ async def select_collaborator_role(
                 expires_at = EXCLUDED.expires_at
         """), {
             "code": code,
-            "uid": current_user.id,
+            "uid": db_uid,
             "email": current_user.email,
             "fname": current_user.full_name,
             "phone": current_user.phone or "",
@@ -2955,31 +3154,43 @@ async def get_staff_pairing_status(
     if req_item.get("status") == "APPROVED":
         biz_id = req_item.get("business_id")
         uid = req_item.get("user_id")
-        if uid and biz_id:
+        email = req_item.get("email")
+        if (uid or email) and biz_id:
             try:
-                u_res = await db.execute(select(UserModel).where(UserModel.id == uid))
-                u = u_res.scalar_one_or_none()
-                if u and (u.business_id != biz_id or u.approval_status != "APPROVED"):
-                    u.business_id = biz_id
-                    u.role = req_item.get("role") or u.role
-                    if req_item.get("branch_id"):
-                        b_chk = await db.execute(select(BranchModel.id).where(BranchModel.id == req_item["branch_id"]))
-                        u.branch_id = b_chk.scalar_one_or_none()
-                    u.approval_status = "APPROVED"
-                    u.is_active = True
-                    u.updated_at = datetime.utcnow()
-                    db.add(u)
-                    await db.execute(
-                        update(UserSessionModel)
-                        .where(UserSessionModel.user_id == u.id)
-                        .values(business_id=biz_id)
-                    )
-                    await db.execute(
-                        update(UserPreferenceModel)
-                        .where(UserPreferenceModel.user_id == u.id)
-                        .values(business_id=biz_id)
-                    )
-                    await db.commit()
+                cond = []
+                if uid and not str(uid).startswith("tmp-"):
+                    cond.append(UserModel.id == uid)
+                if email:
+                    cond.append(UserModel.email.ilike(str(email).strip()))
+                u = None
+                if cond:
+                    u_res = await db.execute(select(UserModel).where(or_(*cond)))
+                    u = u_res.scalar_one_or_none()
+                if u:
+                    req_item["user_id"] = u.id
+                    if u.business_id != biz_id or u.approval_status != "APPROVED":
+                        u.business_id = biz_id
+                        u.role = req_item.get("role") or u.role
+                        if req_item.get("branch_id"):
+                            b_chk = await db.execute(select(BranchModel.id).where(BranchModel.id == req_item["branch_id"]))
+                            u.branch_id = b_chk.scalar_one_or_none()
+                        u.approval_status = "APPROVED"
+                        u.is_active = True
+                        u.updated_at = datetime.utcnow()
+                        db.add(u)
+                        await db.commit()
+                        await db.refresh(u)
+
+                    token_jti = str(uuid.uuid4())
+                    claims = {
+                        "sub": u.id,
+                        "email": u.email,
+                        "role": u.role,
+                        "business_id": u.business_id,
+                        "full_name": u.full_name,
+                        "jti": token_jti
+                    }
+                    req_item["access_token"] = create_access_token(claims)
             except Exception:
                 pass
         return req_item
@@ -3299,12 +3510,14 @@ async def approve_staff_request(
     if uid or email:
         try:
             cond = []
-            if uid:
+            if uid and not str(uid).startswith("tmp-"):
                 cond.append(UserModel.id == uid)
             if email:
                 cond.append(UserModel.email.ilike(str(email).strip()))
-            user_res = await db.execute(select(UserModel).where(or_(*cond)))
-            user = user_res.scalar_one_or_none()
+            user = None
+            if cond:
+                user_res = await db.execute(select(UserModel).where(or_(*cond)))
+                user = user_res.scalar_one_or_none()
             if user:
                 user.business_id = owner_biz_id
                 user.branch_id = valid_branch_id
@@ -3323,6 +3536,36 @@ async def approve_staff_request(
                     .where(UserPreferenceModel.user_id == user.id)
                     .values(business_id=owner_biz_id)
                 )
+                await db.commit()
+                await db.refresh(user)
+            elif email:
+                # El colaborador es un usuario nuevo provisional: se crea en la BD en este momento
+                # exacto vinculado a la empresa y sucursal autorizada por el Dueño
+                new_uid = f"usr-{uuid.uuid4().hex[:12]}"
+                user = UserModel(
+                    id=new_uid,
+                    email=str(email).lower().strip(),
+                    hashed_password=get_password_hash("staff-authorized"),
+                    full_name=target_req.get("full_name") or str(email).split("@")[0],
+                    phone=target_req.get("phone"),
+                    role=role,
+                    business_id=owner_biz_id,
+                    branch_id=valid_branch_id,
+                    approval_status="APPROVED",
+                    is_active=True,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                db.add(user)
+                await db.flush()
+                target_req["user_id"] = new_uid
+
+                pref = UserPreferenceModel(
+                    user_id=new_uid,
+                    business_id=owner_biz_id,
+                    theme="dark"
+                )
+                db.add(pref)
                 await db.commit()
                 await db.refresh(user)
 

@@ -91,6 +91,9 @@ export const PendingPairingScreen: React.FC<PendingPairingScreenProps> = ({
           setPairingStatus('APPROVED');
           setIsConnecting(true);
           setApprovedRole(res.role || 'CASHIER');
+          if ((res as any)?.access_token) {
+            localStorage.setItem('xion_access_token', (res as any).access_token);
+          }
 
           // Refrescar usuario actualizado con business_id y rol asignado
           try {
@@ -105,6 +108,7 @@ export const PendingPairingScreen: React.FC<PendingPairingScreenProps> = ({
               };
               localStorage.setItem('xion_user', JSON.stringify(freshUpdated));
               localStorage.setItem(`xion_onboarding_completed_${freshUser.id}`, 'true');
+              localStorage.setItem(`xion_onboarding_completed_${currentUser.id}`, 'true');
               setTimeout(() => {
                 onApproved(freshUpdated);
               }, 1200);
@@ -112,8 +116,10 @@ export const PendingPairingScreen: React.FC<PendingPairingScreenProps> = ({
             }
           } catch {}
 
+          const realId = (res as any)?.user_id || currentUser.id;
           const updated: User = {
             ...currentUser,
+            id: realId,
             business_id: (res as any).business_id || currentUser.business_id,
             role: res.role || 'CASHIER',
             branch_id: res.branch_id,
@@ -122,6 +128,7 @@ export const PendingPairingScreen: React.FC<PendingPairingScreenProps> = ({
             onboarding_completed: true
           };
           localStorage.setItem('xion_user', JSON.stringify(updated));
+          localStorage.setItem(`xion_onboarding_completed_${realId}`, 'true');
           localStorage.setItem(`xion_onboarding_completed_${currentUser.id}`, 'true');
           setTimeout(() => {
             onApproved(updated);

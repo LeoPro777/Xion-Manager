@@ -540,6 +540,7 @@ class AuthTokenResponse(BaseModel):
     token_type: str = "bearer"
     user: Dict[str, Any]
     session_id: Optional[str] = None
+    is_new_user: Optional[bool] = None
     preferences: Optional[Dict[str, Any]] = None
 
 class UserPreferenceUpdate(BaseModel):

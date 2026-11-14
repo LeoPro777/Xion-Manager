@@ -258,11 +258,15 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         const res = await api.getStaffPairingStatus(codeToPoll);
         if (res.status === 'APPROVED') {
           setPairingStatus('APPROVED');
+          if ((res as any)?.access_token) {
+            localStorage.setItem('xion_access_token', (res as any).access_token);
+          }
           handleExecuteStaffConnection(
             res.branch_id || selectedBranchId,
             res.branch_name || 'Sucursal Asignada',
             res.role || 'CASHIER',
-            (res as any).business_id
+            (res as any).business_id,
+            (res as any).user_id
           );
         } else if (res.status === 'REJECTED') {
           setPairingStatus('REJECTED');
@@ -324,13 +328,15 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     setTimeout(() => setIsCopiedShare(false), 2500);
   };
 
-  const handleExecuteStaffConnection = (branchId: string, branchName: string, role: Role, businessId?: string) => {
+  const handleExecuteStaffConnection = (branchId: string, branchName: string, role: Role, businessId?: string, persistentUserId?: string) => {
     setPairingSuccessMsg(`¡Vinculación aprobada por el Propietario! Ingresando como ${getRoleLabel(role)}...`);
     setIsPairingStaff(true);
 
     setTimeout(() => {
+      const realId = persistentUserId || currentUser.id;
       const updatedUser: User = {
         ...currentUser,
+        id: realId,
         role: role,
         business_id: businessId || currentUser.business_id,
         branch_id: branchId,
@@ -339,6 +345,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         onboarding_completed: true
       };
 
+      localStorage.setItem(`xion_onboarding_completed_${realId}`, 'true');
       localStorage.setItem(`xion_onboarding_completed_${currentUser.id}`, 'true');
       localStorage.setItem('xion_user', JSON.stringify(updatedUser));
       onCompleted(updatedUser);
@@ -477,13 +484,22 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
       const res = await api.completeOnboarding(payload);
 
+      if ((res as any)?.access_token) {
+        localStorage.setItem('xion_access_token', (res as any).access_token);
+      }
+
+      const realUserId = (res as any)?.user?.id || currentUser.id;
+      localStorage.setItem(`xion_onboarding_completed_${realUserId}`, 'true');
       localStorage.setItem(`xion_onboarding_completed_${currentUser.id}`, 'true');
 
       const updatedUser: User = {
         ...currentUser,
-        full_name: fullName.trim(),
-        phone: finalPersonalPhone,
+        id: realUserId,
+        full_name: (res as any)?.user?.full_name || fullName.trim(),
+        phone: (res as any)?.user?.phone || finalPersonalPhone,
         business_id: (res as any)?.business?.id || (res as any)?.user?.business_id || currentUser.business_id,
+        branch_id: (res as any)?.user?.branch_id || currentUser.branch_id,
+        branch_name: (res as any)?.user?.branch_name || currentUser.branch_name,
         role: 'OWNER',
         approval_status: 'APPROVED',
         onboarding_completed: true
