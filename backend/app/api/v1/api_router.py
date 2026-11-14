@@ -365,8 +365,20 @@ async def get_xion_pay_destination_accounts():
                     "email": zl.get("correo", "pagos@xionpay.com"),
                     "label": f"Zelle ({zl.get('correo', 'pagos@xionpay.com')})"
                 })
+            if "binance_pay" in methods or "binance" in methods:
+                bn = methods.get("binance_pay") or methods.get("binance") or {}
+                accs.append({
+                    "id": "xionpay-binance",
+                    "method": "binance_pay",
+                    "account_holder": bn.get("titular", "Xion Corp Merchant"),
+                    "binance_id": bn.get("binance_id", "284910294"),
+                    "email": bn.get("correo", "crypto@xionpay.com"),
+                    "label": f"Binance Pay ID: {bn.get('binance_id', '284910294')}"
+                })
             if accs:
-                COMPANY_DESTINATION_ACCOUNTS = accs
+                fetched_methods = {a["method"] for a in accs}
+                remaining = [a for a in COMPANY_DESTINATION_ACCOUNTS if a["method"] not in fetched_methods]
+                COMPANY_DESTINATION_ACCOUNTS = accs + remaining
     except Exception:
         pass
 

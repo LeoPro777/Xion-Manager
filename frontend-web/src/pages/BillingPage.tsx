@@ -253,8 +253,8 @@ export const BillingPage: React.FC<BillingPageProps> = ({ onNavigateToPaymentRep
                       <span>Monto calculado: <strong className="text-white">${totalUsd.toFixed(2)} USD</strong> (≈ Bs. {totalBs.toFixed(2)})</span>
                     </div>
                     <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800/80">
-                      <strong className="text-cyan-300 block mb-0.5">✓ Asistente en 2 Pasos</strong>
-                      <span>Copia datos bancarios en 1 toque y consigna tu capture bancario al instante.</span>
+                      <strong className="text-cyan-300 block mb-0.5">✓ Asistente en 3 Pantallas</strong>
+                      <span>1. Elige tu plan, 2. Selecciona forma de pago con datos bancarios, 3. Envía tu comprobante.</span>
                     </div>
                   </div>
 
@@ -265,7 +265,7 @@ export const BillingPage: React.FC<BillingPageProps> = ({ onNavigateToPaymentRep
                       className="w-full py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs sm:text-sm shadow-lg shadow-cyan-500/25 transition-all flex items-center justify-center gap-2 active:scale-95 min-h-[48px]"
                     >
                       <Receipt className="w-4 h-4" />
-                      <span>Iniciar Renovación de Suscripción</span>
+                      <span>Formulario de Pago de Planes (Asistente en 3 Pasos)</span>
                       <ArrowRight className="w-4 h-4" />
                     </button>
 
