@@ -101,6 +101,22 @@ export interface CashRegister {
   device_paired?: boolean;
   device_token_preview?: string;
   paired_at?: string;
+  last_seen_at?: string;
+}
+
+export interface CashRegisterPairingRequest {
+  id?: string;
+  pairing_code: string;
+  hardware_uuid?: string;
+  device_name?: string;
+  client_version?: string;
+  branch_id?: string;
+  branch_name?: string;
+  name?: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED' | 'REVOKED';
+  device_token?: string;
+  created_at?: string;
+  expires_at?: string;
 }
 
 export type ProductType = 'physical' | 'service' | 'virtual';

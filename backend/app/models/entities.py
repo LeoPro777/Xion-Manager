@@ -134,6 +134,9 @@ class CashRegister(Base):
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     hardware_uuid: Mapped[Optional[str]] = mapped_column(String(150))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    device_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    paired_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -394,5 +397,24 @@ class StaffPairing(Base):
     status: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+class CashRegisterPairing(Base):
+    __tablename__ = "cash_register_pairings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    pairing_code: Mapped[str] = mapped_column(String(10), unique=True, index=True, nullable=False)
+    cash_register_id: Mapped[Optional[str]] = mapped_column(ForeignKey("cash_registers.id", ondelete="CASCADE"), nullable=True, index=True)
+    business_id: Mapped[Optional[str]] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=True, index=True)
+    branch_id: Mapped[Optional[str]] = mapped_column(ForeignKey("branches.id", ondelete="SET NULL"), nullable=True, index=True)
+    branch_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    name: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    hardware_uuid: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    device_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    client_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)
+    device_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
 
 

@@ -80,6 +80,23 @@ class CashRegisterResponse(BaseModel):
     allowed_user_ids: List[str] = []
     payment_methods: List[str] = []
     created_at: datetime
+    device_paired: Optional[bool] = False
+    device_token_preview: Optional[str] = None
+    paired_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
+
+class CashRegisterPairingRequest(BaseModel):
+    pairing_code: Optional[str] = None
+    hardware_uuid: Optional[str] = None
+    device_name: Optional[str] = None
+    client_version: Optional[str] = "1.0.0"
+    branch_id: Optional[str] = None
+
+class CashRegisterPairingConfirm(BaseModel):
+    pairing_code: str
+    branch_id: str
+    name: Optional[str] = None
+    business_id: Optional[str] = None
 
 class PaymentReportCreate(BaseModel):
     order_id: Optional[str] = None

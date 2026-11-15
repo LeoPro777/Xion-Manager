@@ -23,12 +23,17 @@ import {
   DollarSign,
   Tv,
   ShieldAlert,
-  KeyRound
+  KeyRound,
+  QrCode,
+  Copy,
+  Check,
+  RefreshCw
 } from 'lucide-react';
 import { api } from '../services/api';
-import { Branch, CashRegister, User, CashSessionSyncItem, PaymentMethod } from '../types';
+import { Branch, CashRegister, User, CashSessionSyncItem, PaymentMethod, CashRegisterPairingRequest } from '../types';
 import { LocationMapPicker, MapMarkerItem } from '../components/LocationMapPicker';
 import { LocationPickerModal } from '../components/LocationPickerModal';
+import { QrCodeSvg } from '../components/QrCodeSvg';
 
 export const BranchesPage: React.FC = () => {
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -67,17 +72,32 @@ export const BranchesPage: React.FC = () => {
   const [formRegLng, setFormRegLng] = useState('-71.6125');
   const [formRegLocationName, setFormRegLocationName] = useState('');
 
-  // Smart TV Pairing Modal States
+  // Cash Register Pairing (6 Dígitos / QR) States
   const [showPairingModal, setShowPairingModal] = useState(false);
+  const [pairingTab, setPairingTab] = useState<'PENDING' | 'ENTER_CODE' | 'INVITE_QR'>('PENDING');
   const [pairingCodeInput, setPairingCodeInput] = useState('');
   const [pairingBranchId, setPairingBranchId] = useState('');
   const [pairingTerminalName, setPairingTerminalName] = useState('');
+  const [pendingCashRegisterRequests, setPendingCashRegisterRequests] = useState<CashRegisterPairingRequest[]>([]);
   const [isPairing, setIsPairing] = useState(false);
+  const [copiedInviteCode, setCopiedInviteCode] = useState(false);
+  const [generatedInviteCode, setGeneratedInviteCode] = useState('842109');
 
   const [auditModalRegister, setAuditModalRegister] = useState<CashRegister | null>(null);
 
+  const fetchPendingPairings = async () => {
+    try {
+      const reqs = await api.getPendingCashRegisterRequests();
+      setPendingCashRegisterRequests(reqs);
+      return reqs;
+    } catch {
+      return [];
+    }
+  };
+
   useEffect(() => {
     loadData();
+    fetchPendingPairings();
   }, []);
 
   const loadData = async () => {
@@ -223,29 +243,78 @@ export const BranchesPage: React.FC = () => {
     setCashRegisters(cashRegisters.map(r => r.id === updated.id ? updated : r));
   };
 
-  // Smart TV Pairing Handlers
-  const handleConfirmPairing = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pairingCodeInput.trim()) return;
+  // Cash Register Pairing (6 Dígitos / QR) Handlers
+  const handleOpenPairingModal = async () => {
+    const reqs = await fetchPendingPairings();
+    if (reqs.length > 0) {
+      setPairingTab('PENDING');
+    } else {
+      setPairingTab('ENTER_CODE');
+    }
+    setPairingBranchId(branches[0]?.id || '');
+    setPairingCodeInput('');
+    setPairingTerminalName('');
+    setGeneratedInviteCode(`${Math.floor(100000 + Math.random() * 900000)}`);
+    setShowPairingModal(true);
+  };
+
+  const handleApprovePairing = async (code: string, branchId?: string, name?: string) => {
+    const cleanCode = code.replace(/\D/g, '').slice(0, 6);
+    if (!cleanCode || cleanCode.length !== 6) {
+      alert('Debes ingresar un código numérico exacto de 6 dígitos.');
+      return;
+    }
     setIsPairing(true);
     try {
-      const paired = await api.pairTerminalWithCode(
-        pairingCodeInput,
-        pairingBranchId || branches[0]?.id || 'branch-1',
-        pairingTerminalName
-      );
-      setCashRegisters(prev => [...prev, paired]);
+      const targetBranch = branchId || pairingBranchId || branches[0]?.id || 'branch-1';
+      const targetName = (name || pairingTerminalName || `Caja ${cleanCode}`).trim();
+      const res = await api.approveCashRegisterRequest(cleanCode, targetBranch, targetName);
+
+      setCashRegisters(prev => {
+        const idx = prev.findIndex(r => r.id === res.cash_register.id);
+        if (idx !== -1) {
+          const updated = [...prev];
+          updated[idx] = res.cash_register;
+          return updated;
+        }
+        return [...prev, res.cash_register];
+      });
+
       const freshBrs = await api.getBranches();
       setBranches(freshBrs);
+      setPendingCashRegisterRequests(prev => prev.filter(p => p.pairing_code !== cleanCode));
       setShowPairingModal(false);
       setPairingCodeInput('');
       setPairingTerminalName('');
-      alert(`¡Terminal física autorizada con éxito!\n\nSe ha emitido el Device Token para "${paired.name}". La app en la PC de caja quedó vinculada y lista para que los cajeros ingresen con su PIN.`);
-    } catch {
-      alert('Error al vincular terminal. Verifica el código e intenta nuevamente.');
+      alert(`¡Caja POS "${res.cash_register.name}" autorizada y vinculada con éxito!\n\nSe ha emitido el Device Token permanente. La terminal física ya puede operar.`);
+    } catch (err: any) {
+      alert(err.message || 'Error al autorizar terminal POS. Verifica el código de 6 dígitos.');
     } finally {
       setIsPairing(false);
     }
+  };
+
+  const handleRejectPairing = async (code: string) => {
+    try {
+      await api.rejectCashRegisterRequest(code);
+      setPendingCashRegisterRequests(prev => prev.filter(p => p.pairing_code !== code));
+    } catch {}
+  };
+
+  const handleGenerateNewInviteCode = () => {
+    setGeneratedInviteCode(`${Math.floor(100000 + Math.random() * 900000)}`);
+    setCopiedInviteCode(false);
+  };
+
+  const handleCopyInviteCode = () => {
+    navigator.clipboard.writeText(generatedInviteCode);
+    setCopiedInviteCode(true);
+    setTimeout(() => setCopiedInviteCode(false), 2000);
+  };
+
+  const handleConfirmPairing = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await handleApprovePairing(pairingCodeInput, pairingBranchId, pairingTerminalName);
   };
 
   const handleRevokeDevice = async (register: CashRegister) => {
@@ -368,15 +437,17 @@ export const BranchesPage: React.FC = () => {
 
           <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
             <button
-              onClick={() => {
-                setPairingBranchId(branches[0]?.id || '');
-                setShowPairingModal(true);
-              }}
-              className="flex items-center gap-1 px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-lg sm:rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 transition-all"
+              onClick={handleOpenPairingModal}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-lg sm:rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 transition-all relative"
             >
               <Tv className="w-3.5 h-3.5" />
               <span className="hidden xs:inline">Vincular</span>
-              <span>Smart TV</span>
+              <span>Caja POS</span>
+              {pendingCashRegisterRequests.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
+                  {pendingCashRegisterRequests.length}
+                </span>
+              )}
             </button>
 
             <button
@@ -1297,19 +1368,19 @@ export const BranchesPage: React.FC = () => {
 
 
       {/* ========================================================
-          MODAL: VINCULAR TERMINAL CON CÓDIGO SMART TV
+          MODAL: VINCULAR CAJA POS (6 DÍGITOS / QR)
       ======================================================== */}
       {showPairingModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
           <div className="glass-panel w-full max-w-lg p-6 rounded-2xl border border-slate-800 space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-                  <Tv className="w-4 h-4 text-emerald-400" />
+                <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
+                  <Tv className="w-4 h-4 text-cyan-400" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-slate-100">Vincular Nueva Caja (Flujo Smart TV)</h4>
-                  <p className="text-[11px] text-slate-400">Autoriza la PC física sin ingresar tu contraseña de dueño</p>
+                  <h4 className="text-sm font-bold text-slate-100">Vincular Caja POS (6 Dígitos / QR)</h4>
+                  <p className="text-[11px] text-slate-400">Autoriza la PC física o terminal táctil sin exponer tu contraseña de dueño</p>
                 </div>
               </div>
               <button onClick={() => setShowPairingModal(false)} className="text-slate-400 hover:text-white">
@@ -1317,80 +1388,276 @@ export const BranchesPage: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleConfirmPairing} className="space-y-4 text-xs">
-              {/* Código Smart TV de 6 caracteres */}
-              <div className="p-4 rounded-xl bg-slate-950/90 border border-slate-800/80 text-center space-y-2">
-                <label className="block text-slate-300 font-bold text-xs uppercase tracking-wider">
-                  Código de 6 Caracteres de la Pantalla
-                </label>
-                <p className="text-[11px] text-slate-400">
-                  Abre la app en la PC de caja y escribe el código que se muestra (ej: <span className="font-mono text-cyan-400 font-bold">X9-B42</span>):
-                </p>
-                <input
-                  type="text"
-                  required
-                  maxLength={7}
-                  placeholder="X9-B42"
-                  value={pairingCodeInput}
-                  onChange={e => setPairingCodeInput(e.target.value.toUpperCase())}
-                  className="w-48 mx-auto text-center font-mono text-2xl font-extrabold tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-xl py-2 px-3 text-cyan-400 focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/30 uppercase block"
-                />
-              </div>
+            {/* Pestañas de Navegación del Modal */}
+            <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setPairingTab('PENDING')}
+                className={`py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                  pairingTab === 'PENDING'
+                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>En Espera</span>
+                {pendingCashRegisterRequests.length > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
+                    {pendingCashRegisterRequests.length}
+                  </span>
+                )}
+              </button>
 
-              {/* Sede y Nombre de Caja */}
+              <button
+                type="button"
+                onClick={() => setPairingTab('ENTER_CODE')}
+                className={`py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                  pairingTab === 'ENTER_CODE'
+                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>Ingresar Código</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPairingTab('INVITE_QR')}
+                className={`py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                  pairingTab === 'INVITE_QR'
+                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <QrCode className="w-3.5 h-3.5" />
+                <span>Invitar QR</span>
+              </button>
+            </div>
+
+            {/* TAB 1: SOLICITUDES EN ESPERA */}
+            {pairingTab === 'PENDING' && (
               <div className="space-y-3">
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Sucursal de Destino *</label>
+                {pendingCashRegisterRequests.length > 0 ? (
+                  pendingCashRegisterRequests.map((req) => (
+                    <div key={req.pairing_code} className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-black text-cyan-400 text-lg tracking-wider">{req.pairing_code}</span>
+                            <span className="text-white font-bold text-xs">{req.name || req.device_name || 'Terminal POS'}</span>
+                          </div>
+                          <span className="text-[11px] text-slate-400 block mt-0.5">
+                            Hardware: <strong className="text-slate-200 font-mono">{req.hardware_uuid || 'Dispositivo Físico'}</strong> • Versión {req.client_version || '1.0'}
+                          </span>
+                        </div>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
+                          Pendiente
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <label className="block text-slate-400 text-[10px] font-semibold mb-1">Sucursal:</label>
+                          <select
+                            defaultValue={req.branch_id || pairingBranchId || branches[0]?.id}
+                            onChange={(e) => { req.branch_id = e.target.value; }}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs font-semibold"
+                          >
+                            {branches.map(b => (
+                              <option key={b.id} value={b.id}>{b.name}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-400 text-[10px] font-semibold mb-1">Nombre de Caja:</label>
+                          <input
+                            type="text"
+                            defaultValue={req.name || req.device_name || `Caja ${req.pairing_code}`}
+                            onChange={(e) => { req.name = e.target.value; }}
+                            placeholder="Ej: Caja 1 - Pasillo Central"
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs font-semibold"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800/60">
+                        <button
+                          type="button"
+                          onClick={() => handleRejectPairing(req.pairing_code)}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 font-bold text-xs"
+                        >
+                          Descartar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isPairing}
+                          onClick={() => handleApprovePairing(req.pairing_code, req.branch_id, req.name)}
+                          className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 disabled:opacity-50"
+                        >
+                          {isPairing ? 'Autorizando...' : 'Aprobar y Vincular'}
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="py-8 text-center space-y-2">
+                    <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 mx-auto">
+                      <Clock className="w-6 h-6" />
+                    </div>
+                    <p className="text-xs font-bold text-slate-300">No hay solicitudes de cajas pendientes</p>
+                    <p className="text-[11px] text-slate-400 max-w-xs mx-auto">
+                      Abre Xion-POS en la terminal física y solicita vinculación, o ingresa manualmente el código de 6 dígitos que muestra su pantalla.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setPairingTab('ENTER_CODE')}
+                      className="mt-2 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs font-bold"
+                    >
+                      Ingresar Código Manualmente →
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 2: INGRESAR CÓDIGO MANUAL */}
+            {pairingTab === 'ENTER_CODE' && (
+              <form onSubmit={handleConfirmPairing} className="space-y-3.5 text-xs">
+                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-center space-y-2">
+                  <label className="block text-slate-300 font-bold text-xs uppercase tracking-wider">
+                    Código Mostrado en la Pantalla de la Terminal POS
+                  </label>
+                  <p className="text-[11px] text-slate-400">
+                    Escribe los 6 dígitos numéricos que muestra la terminal física:
+                  </p>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    placeholder="123456"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    autoFocus
+                    value={pairingCodeInput}
+                    onChange={(e) => setPairingCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="w-full max-w-[200px] mx-auto text-center font-mono text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-xl py-2 px-3 text-cyan-400 focus:outline-none focus:border-cyan-400 block"
+                  />
+                </div>
+
+                <div className="space-y-2.5">
+                  <div>
+                    <label className="block text-slate-400 font-semibold mb-1">Sucursal de Destino *</label>
+                    <select
+                      value={pairingBranchId || branches[0]?.id}
+                      onChange={e => setPairingBranchId(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
+                    >
+                      {branches.map(b => (
+                        <option key={b.id} value={b.id}>{b.name} ({b.address.slice(0, 30)}...)</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 font-semibold mb-1">Nombre Descriptivo de la Caja *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej: Caja Principal - Pasillo 1"
+                      value={pairingTerminalName}
+                      onChange={e => setPairingTerminalName(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
+                    />
+                  </div>
+                </div>
+
+                {/* Security Benefit Callout */}
+                <div className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-300">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Máxima Seguridad:</strong> La terminal física recibirá un <em>Device Token</em> permanente ligado al hardware. Los cajeros sólo necesitarán su PIN numérico para abrir turno, y puedes revocar el acceso a esta máquina remotamente en cualquier momento.
+                  </span>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="pt-2 border-t border-slate-800 flex justify-end gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowPairingModal(false)}
+                    className="px-4 py-2 rounded-xl bg-slate-900 text-slate-400 hover:bg-slate-800 font-semibold text-xs"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isPairing || pairingCodeInput.length !== 6}
+                    className="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-lg shadow-emerald-500/20 active:scale-95 disabled:opacity-50"
+                  >
+                    {isPairing ? 'Autorizando Equipo...' : 'Autorizar y Vincular Equipo'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* TAB 3: INVITAR POR QR */}
+            {pairingTab === 'INVITE_QR' && (
+              <div className="space-y-4 text-center">
+                <div className="space-y-1">
+                  <h5 className="text-sm font-bold text-white">Código QR de Vinculación de Caja POS</h5>
+                  <p className="text-xs text-slate-400">
+                    Escanea este código desde la app Xion-POS para vincular la caja al instante:
+                  </p>
+                </div>
+
+                <div className="flex flex-col items-center justify-center gap-3 py-2">
+                  <QrCodeSvg
+                    value={`xion://pair-pos?code=${generatedInviteCode}&branch=${pairingBranchId || branches[0]?.id}`}
+                    size={160}
+                    logoText="POS"
+                  />
+
+                  <div className="inline-flex items-center gap-3 p-2.5 px-4 rounded-xl bg-slate-900 border border-cyan-500/40">
+                    <span className="font-mono text-2xl font-black text-cyan-400 tracking-widest">{generatedInviteCode}</span>
+                    <button
+                      type="button"
+                      onClick={handleCopyInviteCode}
+                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                      title="Copiar código"
+                    >
+                      {copiedInviteCode ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleGenerateNewInviteCode}
+                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                      title="Generar otro código"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="text-left">
+                  <label className="block text-slate-400 text-xs font-semibold mb-1">Sucursal a Asignar:</label>
                   <select
-                    value={pairingBranchId}
-                    onChange={e => setPairingBranchId(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
+                    value={pairingBranchId || branches[0]?.id}
+                    onChange={(e) => setPairingBranchId(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 text-xs font-semibold"
                   >
                     {branches.map(b => (
-                      <option key={b.id} value={b.id}>{b.name} ({b.address.slice(0, 30)}...)</option>
+                      <option key={b.id} value={b.id}>{b.name}</option>
                     ))}
                   </select>
                 </div>
 
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1">Nombre Descriptivo de la Caja *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ej: Caja Principal - Pasillo 1"
-                    value={pairingTerminalName}
-                    onChange={e => setPairingTerminalName(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100"
-                  />
+                <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-400 text-left">
+                  <p>
+                    💡 Abre <strong>Xion POS</strong> en tu terminal física. En la pantalla inicial de bienvenida o configuración, escanea este código o ingresa los 6 dígitos para enlazar la terminal a esta sucursal.
+                  </p>
                 </div>
               </div>
-
-              {/* Security Benefit Callout */}
-              <div className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-300">
-                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                <span>
-                  <strong>Máxima Seguridad:</strong> La terminal física recibirá un <em>Device Token</em> exclusivo. Los cajeros sólo necesitarán su PIN numérico para abrir turno, y puedes revocar el acceso a esta máquina remotamente en cualquier momento.
-                </span>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="pt-3 border-t border-slate-800 flex justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setShowPairingModal(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-900 text-slate-400 hover:bg-slate-800 font-semibold text-xs"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isPairing || !pairingCodeInput.trim()}
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-lg shadow-emerald-500/20 active:scale-95 disabled:opacity-50"
-                >
-                  {isPairing ? 'Autorizando Equipo...' : 'Autorizar y Vincular Equipo'}
-                </button>
-              </div>
-            </form>
+            )}
           </div>
         </div>
       )}

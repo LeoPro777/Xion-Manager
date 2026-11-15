@@ -47,6 +47,7 @@ from app.models.entities import (
     AuditLog as AuditLogModel,
     Branch as BranchModel,
     CashRegister as CashRegisterModel,
+    CashRegisterPairing as CashRegisterPairingModel,
     BusinessSubscription
 )
 from app.core.security import create_access_token, decode_access_token, verify_google_id_token, get_password_hash, verify_password
@@ -2037,6 +2038,66 @@ async def get_dashboard_metrics(
 branches_db: List[dict] = []
 
 cash_registers_db: List[dict] = []
+cash_register_pairings_db: List[dict] = []
+
+# Rate Limiter y Rastreador de Intentos Fallidos en memoria para Vinculación (Máximo 5 intentos)
+pairing_rate_limit_store = defaultdict(list)
+pairing_failed_attempts_store: dict[str, dict] = defaultdict(lambda: {"count": 0, "blocked_until": 0.0})
+
+def check_pairing_rate_limit(client_ip: str, max_requests: int = 10, window_seconds: int = 60):
+    now = time.time()
+    timestamps = [t for t in pairing_rate_limit_store[client_ip] if now - t < window_seconds]
+    if len(timestamps) >= max_requests:
+        retry_after = int(window_seconds - (now - timestamps[0]))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Demasiados intentos de vinculación. Por favor espera {max(retry_after, 1)} segundos antes de reintentar.",
+            headers={"Retry-After": str(max(retry_after, 1))}
+        )
+    timestamps.append(now)
+    pairing_rate_limit_store[client_ip] = timestamps
+
+def check_pairing_attempts(identifier: str, max_allowed: int = 5):
+    """Verifica si el identificador está bloqueado por exceder el límite de 5 intentos fallidos."""
+    now = time.time()
+    record = pairing_failed_attempts_store[identifier]
+    if record["blocked_until"] > now:
+        remaining_secs = int(record["blocked_until"] - now)
+        mins = remaining_secs // 60 + 1
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Has superado el límite de {max_allowed} intentos fallidos. Bloqueado temporalmente. Intenta nuevamente en {mins} minutos."
+        )
+
+def record_failed_pairing_attempt(identifier: str, max_allowed: int = 5, block_minutes: int = 10) -> int:
+    """Registra un fallo. Al 5to intento erróneo bloquea por 10 minutos. Retorna los intentos restantes."""
+    now = time.time()
+    record = pairing_failed_attempts_store[identifier]
+    if record["blocked_until"] > now:
+        remaining_secs = int(record["blocked_until"] - now)
+        mins = remaining_secs // 60 + 1
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Has superado el límite de {max_allowed} intentos fallidos. Bloqueado temporalmente. Intenta nuevamente en {mins} minutos."
+        )
+    if record["blocked_until"] > 0 and record["blocked_until"] <= now:
+        record["count"] = 0
+        record["blocked_until"] = 0.0
+
+    record["count"] += 1
+    remaining = max_allowed - record["count"]
+    if record["count"] >= max_allowed:
+        record["blocked_until"] = now + (block_minutes * 60)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Has superado el límite de {max_allowed} intentos fallidos. Por motivos de seguridad, la vinculación queda bloqueada temporalmente por {block_minutes} minutos."
+        )
+    return max(remaining, 0)
+
+def reset_failed_pairing_attempts(identifier: str):
+    """Limpia los intentos fallidos al tener éxito."""
+    if identifier in pairing_failed_attempts_store:
+        del pairing_failed_attempts_store[identifier]
 
 def recalculate_branch_cash_registers():
     for b in branches_db:
@@ -2206,8 +2267,14 @@ async def list_cash_registers(
     # Sincronizar cajas persistidas desde PostgreSQL
     db_cr_res = await db.execute(select(CashRegisterModel))
     for cr in db_cr_res.scalars().all():
-        if not any(r["id"] == cr.id for r in cash_registers_db):
-            b_name = next((b["name"] for b in branches_db if b["id"] == cr.branch_id), "Sucursal Asignada")
+        b_name = next((b["name"] for b in branches_db if b["id"] == cr.branch_id), "Sucursal Asignada")
+        dev_paired = bool(getattr(cr, "device_token", None))
+        tok_prev = f"{cr.device_token[:12]}..." if getattr(cr, "device_token", None) else None
+        p_at = cr.paired_at.isoformat() if getattr(cr, "paired_at", None) else None
+        ls_at = cr.last_seen_at.isoformat() if getattr(cr, "last_seen_at", None) else None
+
+        existing = next((r for r in cash_registers_db if r["id"] == cr.id), None)
+        if not existing:
             cash_registers_db.append({
                 "id": cr.id,
                 "business_id": cr.business_id,
@@ -2221,7 +2288,23 @@ async def list_cash_registers(
                 "today_sales_total": 0.0,
                 "allowed_user_ids": ["usr-admin-01"],
                 "payment_methods": ["CASH_USD", "CASH_BS", "PAGO_MOVIL", "DEBIT_CARD"],
-                "created_at": cr.created_at or datetime.utcnow()
+                "created_at": cr.created_at or datetime.utcnow(),
+                "device_paired": dev_paired,
+                "device_token_preview": tok_prev,
+                "paired_at": p_at,
+                "last_seen_at": ls_at
+            })
+        else:
+            existing.update({
+                "branch_id": cr.branch_id,
+                "branch_name": b_name,
+                "name": cr.name,
+                "hardware_uuid": cr.hardware_uuid or existing.get("hardware_uuid"),
+                "is_active": cr.is_active,
+                "device_paired": dev_paired,
+                "device_token_preview": tok_prev,
+                "paired_at": p_at,
+                "last_seen_at": ls_at
             })
 
     registers = cash_registers_db
@@ -2345,6 +2428,615 @@ async def toggle_cash_register_status(register_id: str, operator_name: Optional[
                 r["status"] = "OPEN"
                 r["current_operator"] = operator_name
             return r
+    return {"message": "Caja no encontrada"}
+
+# ========================================================
+# Cash Register / POS Terminal Pairing Endpoints (6 Dígitos)
+# ========================================================
+
+@api_router.post("/cash-registers/request-pairing")
+async def request_cash_register_pairing(
+    request: Request,
+    payload: dict = Body(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Xion-POS solicita vinculación con código numérico de 6 dígitos.
+    Aplica rate limiting (máx 10 peticiones por minuto por IP) y vigencia de 15 minutos.
+    Retorna pairing_code, expires_in_seconds y qr_payload para deep link (xion://pair-pos?code=...).
+    """
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    check_pairing_rate_limit(client_ip, max_requests=10, window_seconds=60)
+
+    import random
+    raw_code = payload.get("pairing_code")
+    if raw_code and str(raw_code).strip():
+        code = "".join(filter(str.isdigit, str(raw_code).strip()))[:6]
+    else:
+        code = None
+
+    if not code or len(code) != 6:
+        active_codes = {p["pairing_code"] for p in cash_register_pairings_db if p.get("status") == "PENDING"}
+        for _ in range(50):
+            cand = f"{random.randint(100000, 999999)}"
+            if cand not in active_codes:
+                code = cand
+                break
+        if not code:
+            code = f"{random.randint(100000, 999999)}"
+
+    now_utc = datetime.utcnow()
+    expires_utc = now_utc + timedelta(minutes=15)
+    hw_uuid = payload.get("hardware_uuid") or f"HW-POS-{code}"
+    device_name = payload.get("device_name") or f"Terminal POS ({code})"
+    client_version = payload.get("client_version") or "1.0.0"
+    branch_id = payload.get("branch_id")
+
+    req_data = {
+        "id": f"crp-{uuid.uuid4().hex[:12]}",
+        "pairing_code": code,
+        "hardware_uuid": hw_uuid,
+        "device_name": device_name,
+        "client_version": client_version,
+        "branch_id": branch_id,
+        "branch_name": "Pendiente de Asignación",
+        "name": device_name,
+        "business_id": None,
+        "cash_register_id": None,
+        "status": "PENDING",
+        "device_token": None,
+        "created_at": now_utc.isoformat(),
+        "expires_at": expires_utc.isoformat()
+    }
+
+    cash_register_pairings_db[:] = [p for p in cash_register_pairings_db if p["pairing_code"] != code]
+    cash_register_pairings_db.append(req_data)
+
+    try:
+        from sqlalchemy import text
+        await db.execute(
+            text("""
+                INSERT INTO cash_register_pairings (
+                    id, pairing_code, hardware_uuid, device_name, client_version,
+                    branch_id, branch_name, name, status, created_at, expires_at
+                ) VALUES (
+                    :id, :pairing_code, :hardware_uuid, :device_name, :client_version,
+                    :branch_id, :branch_name, :name, 'PENDING', :created_at, :expires_at
+                )
+                ON CONFLICT (pairing_code) DO UPDATE SET
+                    hardware_uuid = EXCLUDED.hardware_uuid,
+                    device_name = EXCLUDED.device_name,
+                    client_version = EXCLUDED.client_version,
+                    status = 'PENDING',
+                    created_at = EXCLUDED.created_at,
+                    expires_at = EXCLUDED.expires_at;
+            """),
+            {
+                "id": req_data["id"],
+                "pairing_code": code,
+                "hardware_uuid": hw_uuid,
+                "device_name": device_name,
+                "client_version": client_version,
+                "branch_id": branch_id,
+                "branch_name": "Pendiente de Asignación",
+                "name": device_name,
+                "created_at": now_utc,
+                "expires_at": expires_utc
+            }
+        )
+        await db.commit()
+    except Exception:
+        pass
+
+    return {
+        "pairing_code": code,
+        "expires_in_seconds": 900,
+        "qr_payload": f"xion://pair-pos?code={code}",
+        "request": req_data
+    }
+
+@api_router.get("/cash-registers/pairing-status/{pairing_code}")
+async def get_cash_register_pairing_status(
+    pairing_code: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Sondeo periódico de Xion-POS para verificar si el Dueño autorizó el código de 6 dígitos.
+    Retorna PENDING, APPROVED, REJECTED o EXPIRED.
+    Al aprobarse, retorna el Device Token permanente y configuración de la caja.
+    """
+    code = "".join(filter(str.isdigit, str(pairing_code).strip()))[:6]
+    req_item = next((p for p in cash_register_pairings_db if p["pairing_code"] == code), None)
+
+    if not req_item or req_item.get("status") == "PENDING":
+        try:
+            from sqlalchemy import text
+            p_res = await db.execute(
+                text("""
+                    SELECT id, pairing_code, cash_register_id, business_id, branch_id, branch_name,
+                           name, hardware_uuid, device_name, status, device_token, expires_at
+                    FROM cash_register_pairings
+                    WHERE pairing_code = :code
+                """),
+                {"code": code}
+            )
+            row = p_res.fetchone()
+            if row:
+                db_data = {
+                    "id": row[0],
+                    "pairing_code": row[1],
+                    "cash_register_id": row[2],
+                    "business_id": row[3],
+                    "branch_id": row[4],
+                    "branch_name": row[5],
+                    "name": row[6],
+                    "hardware_uuid": row[7],
+                    "device_name": row[8],
+                    "status": row[9],
+                    "device_token": row[10],
+                    "expires_at": row[11].isoformat() if row[11] else None
+                }
+                if not req_item:
+                    cash_register_pairings_db.append(db_data)
+                    req_item = db_data
+                else:
+                    req_item.update(db_data)
+        except Exception:
+            pass
+
+    if not req_item:
+        return {"status": "PENDING", "pairing_code": code}
+
+    if req_item.get("status") == "REJECTED":
+        return {
+            "status": "REJECTED",
+            "pairing_code": code,
+            "message": "La solicitud de vinculación fue rechazada por el administrador."
+        }
+
+    exp_str = req_item.get("expires_at")
+    if exp_str and req_item.get("status") == "PENDING":
+        try:
+            exp_dt = datetime.fromisoformat(exp_str)
+            if exp_dt < datetime.utcnow():
+                req_item["status"] = "EXPIRED"
+                return {
+                    "status": "EXPIRED",
+                    "pairing_code": code,
+                    "message": "El código de vinculación ha expirado. Por favor genera uno nuevo en la terminal."
+                }
+        except Exception:
+            pass
+
+    if req_item.get("status") == "APPROVED":
+        return {
+            "status": "APPROVED",
+            "pairing_code": code,
+            "cash_register_id": req_item.get("cash_register_id"),
+            "device_token": req_item.get("device_token"),
+            "branch_id": req_item.get("branch_id"),
+            "branch_name": req_item.get("branch_name"),
+            "business_id": req_item.get("business_id"),
+            "name": req_item.get("name"),
+            "hardware_uuid": req_item.get("hardware_uuid"),
+            "message": f"Caja registradora '{req_item.get('name')}' autorizada y vinculada exitosamente."
+        }
+
+    return req_item
+
+@api_router.get("/cash-registers/pending-requests")
+async def list_pending_cash_register_requests(
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Lista de solicitudes pendientes de terminales POS para el panel del Dueño en Sucursales.
+    Combina persistencia en PostgreSQL con memoria, descartando solicitudes expiradas.
+    """
+    verify_system_operational()
+    now = datetime.utcnow()
+    valid_requests = []
+
+    try:
+        from sqlalchemy import text
+        res = await db.execute(
+            text("""
+                SELECT id, pairing_code, hardware_uuid, device_name, client_version,
+                       branch_id, branch_name, name, status, created_at, expires_at
+                FROM cash_register_pairings
+                WHERE status = 'PENDING' AND expires_at > NOW()
+                ORDER BY created_at DESC
+            """)
+        )
+        for row in res.fetchall():
+            valid_requests.append({
+                "id": row[0],
+                "pairing_code": row[1],
+                "hardware_uuid": row[2] or "",
+                "device_name": row[3] or "Terminal POS",
+                "client_version": row[4] or "1.0.0",
+                "branch_id": row[5],
+                "branch_name": row[6] or "Pendiente de Asignación",
+                "name": row[7] or row[3] or "Caja POS",
+                "status": row[8],
+                "created_at": row[9].isoformat() if row[9] else None,
+                "expires_at": row[10].isoformat() if row[10] else None
+            })
+    except Exception:
+        pass
+
+    for p in cash_register_pairings_db:
+        if p.get("status") == "PENDING":
+            exp_str = p.get("expires_at")
+            if exp_str:
+                try:
+                    if datetime.fromisoformat(exp_str) < now:
+                        p["status"] = "EXPIRED"
+                        continue
+                except Exception:
+                    pass
+            if not any(v["pairing_code"] == p["pairing_code"] for v in valid_requests):
+                valid_requests.append(p)
+
+    return valid_requests
+
+@api_router.post("/cash-registers/approve-request")
+@api_router.post("/cash-registers/confirm-pairing")
+async def approve_cash_register_request(
+    request: Request,
+    payload: dict = Body(...),
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    El Dueño aprueba una solicitud de vinculación de terminal POS ingresando o confirmando el código de 6 dígitos.
+    - Aplica protección contra fuerza bruta (máximo 5 intentos fallidos con bloqueo temporal de 10 min).
+    - Valida el límite de cajas del plan suscrito en Xion-Pay.
+    - Genera el Device Token criptográfico permanente para la terminal.
+    - Crea o actualiza la CashRegister en la sucursal asignada.
+    """
+    verify_system_operational()
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    current_user = await get_optional_current_user(authorization, db)
+    ident = f"approve_pos_{current_user.id if current_user else client_ip}"
+    check_pairing_attempts(ident)
+
+    # 1. Determinar el business_id del Dueño con máxima prioridad
+    owner_biz_id = payload.get("business_id") or (current_user.business_id if current_user else None)
+    if not owner_biz_id and current_user:
+        b_res = await db.execute(select(BusinessModel).where(BusinessModel.email == current_user.email))
+        b_obj = b_res.scalar_one_or_none()
+        if b_obj:
+            owner_biz_id = b_obj.id
+
+    if not owner_biz_id:
+        biz_def = await db.execute(
+            select(BusinessModel)
+            .where(~BusinessModel.tax_id.like("J-TMP-%"), ~BusinessModel.tax_id.like("TMP-%"))
+            .order_by(BusinessModel.created_at.desc())
+            .limit(1)
+        )
+        found_def = biz_def.scalar_one_or_none()
+        if not found_def:
+            biz_def = await db.execute(select(BusinessModel).order_by(BusinessModel.created_at.desc()).limit(1))
+            found_def = biz_def.scalar_one_or_none()
+        if found_def:
+            owner_biz_id = found_def.id
+
+    if not owner_biz_id:
+        raise HTTPException(
+            status_code=400,
+            detail="El Dueño debe completar primero la configuración de su empresa antes de vincular cajas registradoras."
+        )
+
+    # 2. Validar código de 6 dígitos numéricos
+    raw_code = payload.get("pairing_code") or ""
+    code = "".join(filter(str.isdigit, str(raw_code).strip()))[:6]
+    if not code or len(code) != 6:
+        remaining = record_failed_pairing_attempt(ident)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Debes ingresar un código numérico exacto de 6 dígitos. Intentos restantes: {remaining}."
+        )
+
+    # 3. Buscar la solicitud en memoria o PostgreSQL
+    target_req = next((p for p in cash_register_pairings_db if p["pairing_code"] == code), None)
+    if not target_req:
+        try:
+            from sqlalchemy import text
+            p_res = await db.execute(
+                text("""
+                    SELECT id, pairing_code, hardware_uuid, device_name, client_version,
+                           branch_id, branch_name, name, status, expires_at
+                    FROM cash_register_pairings
+                    WHERE pairing_code = :code
+                """),
+                {"code": code}
+            )
+            row = p_res.fetchone()
+            if row:
+                target_req = {
+                    "id": row[0],
+                    "pairing_code": row[1],
+                    "hardware_uuid": row[2],
+                    "device_name": row[3],
+                    "client_version": row[4],
+                    "branch_id": row[5],
+                    "branch_name": row[6],
+                    "name": row[7],
+                    "status": row[8],
+                    "expires_at": row[9].isoformat() if row[9] else None
+                }
+                cash_register_pairings_db.append(target_req)
+        except Exception:
+            pass
+
+    if not target_req:
+        remaining = record_failed_pairing_attempt(ident)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Código de vinculación '{code}' no encontrado o no existe. Intentos restantes: {remaining}."
+        )
+
+    if target_req.get("status") == "REJECTED":
+        remaining = record_failed_pairing_attempt(ident)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Esta solicitud de vinculación fue rechazada. Genera un nuevo código en la terminal. Intentos restantes: {remaining}."
+        )
+
+    if target_req.get("expires_at"):
+        try:
+            if datetime.fromisoformat(target_req["expires_at"]) < datetime.utcnow():
+                target_req["status"] = "EXPIRED"
+                remaining = record_failed_pairing_attempt(ident)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El código de vinculación ha expirado. Genera uno nuevo en la terminal POS. Intentos restantes: {remaining}."
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    # 4. Validar límite de cajas del plan Xion-Pay
+    max_pos = xion_pay_state.get("limits", {}).get("max_pos_registers", 4)
+    active_count = len([r for r in cash_registers_db if r.get("business_id") == owner_biz_id and r.get("is_active", True)])
+    if active_count >= max_pos:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Límite de cajas registradoras alcanzado ({active_count}/{max_pos}). Actualiza tu plan en Xion-Pay para vincular más cajas."
+        )
+
+    # 5. Resolver sucursal y nombre de caja
+    branch_id = payload.get("branch_id") or target_req.get("branch_id")
+    valid_branch_id = None
+    if branch_id and str(branch_id).lower() not in ("all", "global", "none"):
+        b_chk = await db.execute(
+            select(BranchModel.id).where(BranchModel.id == branch_id, BranchModel.business_id == owner_biz_id)
+        )
+        valid_branch_id = b_chk.scalar_one_or_none()
+
+    if not valid_branch_id:
+        fb_chk = await db.execute(
+            select(BranchModel.id).where(BranchModel.business_id == owner_biz_id).order_by(BranchModel.created_at.asc()).limit(1)
+        )
+        valid_branch_id = fb_chk.scalar_one_or_none()
+
+    if not valid_branch_id:
+        fb_any = await db.execute(select(BranchModel.id).order_by(BranchModel.created_at.asc()).limit(1))
+        valid_branch_id = fb_any.scalar_one_or_none()
+
+    branch_name = await _get_branch_name(valid_branch_id, db)
+    reg_name = (payload.get("name") or target_req.get("name") or f"Caja {code}").strip()
+    hw_uuid = target_req.get("hardware_uuid") or payload.get("hardware_uuid") or f"HW-POS-{code}"
+
+    # 6. Generar Device Token criptográfico permanente
+    token_jti = str(uuid.uuid4())
+    device_claims = {
+        "sub": f"device-{token_jti[:8]}",
+        "type": "device_token",
+        "business_id": owner_biz_id,
+        "branch_id": valid_branch_id,
+        "hardware_uuid": hw_uuid,
+        "pairing_code": code,
+        "jti": token_jti
+    }
+    raw_token = create_access_token(device_claims)
+    device_token = f"xion_dev_{raw_token}"
+
+    # 7. Crear o actualizar CashRegister en PostgreSQL y memoria
+    reg_id = target_req.get("cash_register_id")
+    db_cr = None
+    if reg_id:
+        db_cr_res = await db.execute(select(CashRegisterModel).where(CashRegisterModel.id == reg_id))
+        db_cr = db_cr_res.scalar_one_or_none()
+
+    if not db_cr:
+        hw_chk = await db.execute(
+            select(CashRegisterModel).where(
+                CashRegisterModel.business_id == owner_biz_id,
+                CashRegisterModel.hardware_uuid == hw_uuid
+            )
+        )
+        db_cr = hw_chk.scalar_one_or_none()
+
+    now_ts = datetime.utcnow()
+    if db_cr:
+        reg_id = db_cr.id
+        db_cr.branch_id = valid_branch_id
+        db_cr.name = reg_name
+        db_cr.hardware_uuid = hw_uuid
+        db_cr.device_token = device_token
+        db_cr.paired_at = now_ts
+        db_cr.last_seen_at = now_ts
+        db_cr.is_active = True
+        db_cr.updated_at = now_ts
+        db.add(db_cr)
+    else:
+        reg_id = f"reg-{int(now_ts.timestamp())}"
+        db_cr = CashRegisterModel(
+            id=reg_id,
+            business_id=owner_biz_id,
+            branch_id=valid_branch_id,
+            name=reg_name,
+            hardware_uuid=hw_uuid,
+            device_token=device_token,
+            paired_at=now_ts,
+            last_seen_at=now_ts,
+            is_active=True,
+            created_at=now_ts,
+            updated_at=now_ts
+        )
+        db.add(db_cr)
+
+    await db.commit()
+    await db.refresh(db_cr)
+
+    # 8. Actualizar registro de solicitud a APPROVED
+    target_req["status"] = "APPROVED"
+    target_req["cash_register_id"] = reg_id
+    target_req["device_token"] = device_token
+    target_req["branch_id"] = valid_branch_id
+    target_req["branch_name"] = branch_name
+    target_req["business_id"] = owner_biz_id
+    target_req["name"] = reg_name
+    target_req["hardware_uuid"] = hw_uuid
+
+    try:
+        from sqlalchemy import text
+        await db.execute(
+            text("""
+                UPDATE cash_register_pairings
+                SET status = 'APPROVED',
+                    cash_register_id = :reg_id,
+                    device_token = :device_token,
+                    business_id = :biz_id,
+                    branch_id = :branch_id,
+                    branch_name = :branch_name,
+                    name = :name
+                WHERE pairing_code = :code
+            """),
+            {
+                "reg_id": reg_id,
+                "device_token": device_token,
+                "biz_id": owner_biz_id,
+                "branch_id": valid_branch_id,
+                "branch_name": branch_name,
+                "name": reg_name,
+                "code": code
+            }
+        )
+        await db.commit()
+    except Exception:
+        pass
+
+    # 9. Actualizar o insertar en cash_registers_db
+    cr_dict = {
+        "id": reg_id,
+        "business_id": owner_biz_id,
+        "branch_id": valid_branch_id,
+        "branch_name": branch_name,
+        "name": reg_name,
+        "hardware_uuid": hw_uuid,
+        "status": "CLOSED",
+        "is_active": True,
+        "current_operator": None,
+        "today_sales_total": 0.0,
+        "allowed_user_ids": ["usr-admin-01"],
+        "payment_methods": ["CASH_USD", "CASH_BS", "PAGO_MOVIL", "DEBIT_CARD"],
+        "created_at": now_ts,
+        "device_paired": True,
+        "device_token_preview": f"{device_token[:12]}...",
+        "paired_at": now_ts.isoformat(),
+        "last_seen_at": now_ts.isoformat()
+    }
+    existing_mem = next((i for i, r in enumerate(cash_registers_db) if r["id"] == reg_id), None)
+    if existing_mem is not None:
+        cash_registers_db[existing_mem].update(cr_dict)
+    else:
+        cash_registers_db.append(cr_dict)
+
+    recalculate_branch_cash_registers()
+    reset_failed_pairing_attempts(ident)
+
+    return {
+        "status": "APPROVED",
+        "message": f"Caja registradora '{reg_name}' autorizada y vinculada exitosamente.",
+        "cash_register": cr_dict,
+        "device_token_preview": f"{device_token[:12]}..."
+    }
+
+@api_router.post("/cash-registers/reject-request")
+async def reject_cash_register_request(
+    payload: dict = Body(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    El Dueño descarta/rechaza una solicitud de vinculación de terminal POS.
+    """
+    verify_system_operational()
+    raw_code = payload.get("pairing_code") or ""
+    code = "".join(filter(str.isdigit, str(raw_code).strip()))[:6]
+
+    for p in cash_register_pairings_db:
+        if p["pairing_code"] == code:
+            p["status"] = "REJECTED"
+
+    try:
+        from sqlalchemy import text
+        await db.execute(
+            text("UPDATE cash_register_pairings SET status = 'REJECTED' WHERE pairing_code = :code"),
+            {"code": code}
+        )
+        await db.commit()
+    except Exception:
+        pass
+
+    return {"message": f"Solicitud de vinculación para código {code} rechazada.", "status": "REJECTED"}
+
+@api_router.post("/cash-registers/{register_id}/revoke-device")
+async def revoke_cash_register_device(
+    register_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Revocación remota inmediata: invalida el Device Token de la caja física.
+    La terminal POS queda desvinculada y obligada a iniciar nuevo ciclo de 6 dígitos.
+    """
+    verify_system_operational()
+    db_cr_res = await db.execute(select(CashRegisterModel).where(CashRegisterModel.id == register_id))
+    db_cr = db_cr_res.scalar_one_or_none()
+    if db_cr:
+        db_cr.device_token = None
+        db_cr.paired_at = None
+        db_cr.updated_at = datetime.utcnow()
+        db.add(db_cr)
+        await db.commit()
+
+    try:
+        from sqlalchemy import text
+        await db.execute(
+            text("UPDATE cash_register_pairings SET status = 'REVOKED' WHERE cash_register_id = :reg_id"),
+            {"reg_id": register_id}
+        )
+        await db.commit()
+    except Exception:
+        pass
+
+    for r in cash_registers_db:
+        if r["id"] == register_id:
+            r["device_paired"] = False
+            r["device_token_preview"] = None
+            r["paired_at"] = None
+            r["status"] = "CLOSED"
+            r["current_operator"] = None
+            recalculate_branch_cash_registers()
+            return {
+                "message": f"Dispositivo de la caja '{r['name']}' revocado exitosamente.",
+                "cash_register": r
+            }
+
     return {"message": "Caja no encontrada"}
 
 
@@ -2966,66 +3658,6 @@ async def user_approval(
 
 # Staff / Employee Pairing DB & Endpoints (Misma lógica de vinculación que las cajas)
 staff_pairings_db: List[dict] = []
-
-# Rate Limiter y Rastreador de Intentos Fallidos en memoria para Vinculación (Máximo 5 intentos)
-pairing_rate_limit_store = defaultdict(list)
-pairing_failed_attempts_store: dict[str, dict] = defaultdict(lambda: {"count": 0, "blocked_until": 0.0})
-
-def check_pairing_rate_limit(client_ip: str, max_requests: int = 10, window_seconds: int = 60):
-    now = time.time()
-    timestamps = [t for t in pairing_rate_limit_store[client_ip] if now - t < window_seconds]
-    if len(timestamps) >= max_requests:
-        retry_after = int(window_seconds - (now - timestamps[0]))
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Demasiados intentos de vinculación. Por favor espera {max(retry_after, 1)} segundos antes de reintentar.",
-            headers={"Retry-After": str(max(retry_after, 1))}
-        )
-    timestamps.append(now)
-    pairing_rate_limit_store[client_ip] = timestamps
-
-def check_pairing_attempts(identifier: str, max_allowed: int = 5):
-    """Verifica si el identificador está bloqueado por exceder el límite de 5 intentos fallidos."""
-    now = time.time()
-    record = pairing_failed_attempts_store[identifier]
-    if record["blocked_until"] > now:
-        remaining_secs = int(record["blocked_until"] - now)
-        mins = remaining_secs // 60 + 1
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Has superado el límite de {max_allowed} intentos fallidos. Bloqueado temporalmente. Intenta nuevamente en {mins} minutos."
-        )
-
-def record_failed_pairing_attempt(identifier: str, max_allowed: int = 5, block_minutes: int = 10) -> int:
-    """Registra un fallo. Al 5to intento erróneo bloquea por 10 minutos. Retorna los intentos restantes."""
-    now = time.time()
-    record = pairing_failed_attempts_store[identifier]
-    if record["blocked_until"] > now:
-        remaining_secs = int(record["blocked_until"] - now)
-        mins = remaining_secs // 60 + 1
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Has superado el límite de {max_allowed} intentos fallidos. Bloqueado temporalmente. Intenta nuevamente en {mins} minutos."
-        )
-    if record["blocked_until"] > 0 and record["blocked_until"] <= now:
-        record["count"] = 0
-        record["blocked_until"] = 0.0
-
-    record["count"] += 1
-    remaining = max_allowed - record["count"]
-    if record["count"] >= max_allowed:
-        record["blocked_until"] = now + (block_minutes * 60)
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Has superado el límite de {max_allowed} intentos fallidos. Por motivos de seguridad, la vinculación queda bloqueada temporalmente por {block_minutes} minutos."
-        )
-    return max(remaining, 0)
-
-def reset_failed_pairing_attempts(identifier: str):
-    """Limpia los intentos fallidos al tener éxito."""
-    if identifier in pairing_failed_attempts_store:
-        del pairing_failed_attempts_store[identifier]
-
 
 @api_router.post("/staff/select-collaborator-role")
 async def select_collaborator_role(

@@ -137,6 +137,35 @@ async def on_startup():
             await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_staff_pairings_code ON staff_pairings (pairing_code);"))
             await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_staff_pairings_status ON staff_pairings (status);"))
 
+            # 2.1. Crear tabla de vinculación de cajas POS y columnas de dispositivo si no existen
+            try:
+                await conn.execute(text("ALTER TABLE cash_registers ADD COLUMN IF NOT EXISTS device_token TEXT;"))
+                await conn.execute(text("ALTER TABLE cash_registers ADD COLUMN IF NOT EXISTS paired_at TIMESTAMP WITHOUT TIME ZONE;"))
+                await conn.execute(text("ALTER TABLE cash_registers ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITHOUT TIME ZONE;"))
+            except Exception:
+                pass
+
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS cash_register_pairings (
+                    id VARCHAR(36) PRIMARY KEY,
+                    pairing_code VARCHAR(10) UNIQUE NOT NULL,
+                    cash_register_id VARCHAR(36) REFERENCES cash_registers(id) ON DELETE CASCADE,
+                    business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
+                    branch_id VARCHAR(36) REFERENCES branches(id) ON DELETE SET NULL,
+                    branch_name VARCHAR(120),
+                    name VARCHAR(80),
+                    hardware_uuid VARCHAR(150),
+                    device_name VARCHAR(120),
+                    client_version VARCHAR(50),
+                    status VARCHAR(20) DEFAULT 'PENDING',
+                    device_token TEXT,
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'),
+                    expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL
+                );
+            """))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_cash_register_pairings_code ON cash_register_pairings (pairing_code);"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_cash_register_pairings_status ON cash_register_pairings (status);"))
+
             # 3. Auto-reparación: Asegurar que toda empresa registrada posea su sucursal principal en branches
             await conn.execute(text("""
                 INSERT INTO branches (id, business_id, name, address, is_active, created_at, updated_at)

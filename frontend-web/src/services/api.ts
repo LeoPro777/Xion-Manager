@@ -2,6 +2,7 @@ import {
   AccountStatus, 
   Branch, 
   CashRegister,
+  CashRegisterPairingRequest,
   DashboardMetrics, 
   ProductInventory, 
   User, 
@@ -876,48 +877,180 @@ export const api = {
     return mockCashRegisters[0];
   },
 
-  // Flujo Smart TV: Autorización y Vinculación de Terminal
-  async pairTerminalWithCode(pairingCode: string, branchId: string, name: string): Promise<CashRegister> {
-    const cleanCode = pairingCode.toUpperCase().trim();
-    const branch = mockBranches.find(b => b.id === branchId) || mockBranches[0];
-    const newRegister: CashRegister = {
-      id: `reg-${Date.now()}`,
-      branch_id: branch.id,
-      branch_name: branch.name,
-      name: name.trim() || `Caja ${cleanCode}`,
-      hardware_uuid: `HW-POS-${cleanCode}-${Date.now().toString().slice(-4)}`,
-      status: 'CLOSED',
-      is_active: true,
-      today_sales_total: 0.0,
-      allowed_user_ids: ['usr-admin-01', 'usr-cashier-01'],
-      payment_methods: ['CASH_USD', 'CASH_BS', 'PAGO_MOVIL', 'DEBIT_CARD'],
-      latitude: branch.latitude || 10.6417,
-      longitude: branch.longitude || -71.6125,
-      location_name: `Terminal Autorizada (${cleanCode})`,
-      created_at: new Date().toISOString(),
-      device_paired: true,
-      device_token_preview: `dev_tok_${cleanCode}`,
-      paired_at: new Date().toISOString()
+  // ========================================================
+  // Flujo de Vinculación de Cajas / Terminales POS (6 Dígitos)
+  // ========================================================
+
+  async requestCashRegisterPairing(payload: {
+    pairing_code?: string;
+    hardware_uuid?: string;
+    device_name?: string;
+    client_version?: string;
+    branch_id?: string;
+  }): Promise<{ pairing_code: string; expires_in_seconds: number; qr_payload: string; request?: any }> {
+    try {
+      const res = await fetch('/api/v1/cash-registers/request-pairing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+
+    const code = payload.pairing_code || `${Math.floor(100000 + Math.random() * 900000)}`;
+    return {
+      pairing_code: code,
+      expires_in_seconds: 900,
+      qr_payload: `xion://pair-pos?code=${code}`
     };
-    mockCashRegisters = [...mockCashRegisters, newRegister];
-    return newRegister;
   },
 
-  // Revocación Remota con 1 Clic
-  async revokeTerminalDevice(id: string): Promise<CashRegister> {
+  async getCashRegisterPairingStatus(pairingCode: string): Promise<{
+    status: 'PENDING' | 'APPROVED' | 'EXPIRED' | 'REJECTED';
+    pairing_code?: string;
+    cash_register_id?: string;
+    device_token?: string;
+    branch_id?: string;
+    branch_name?: string;
+    business_id?: string;
+    name?: string;
+    hardware_uuid?: string;
+    message?: string;
+  }> {
+    const cleanCode = pairingCode.replace(/\D/g, '').trim() || pairingCode.trim();
+    try {
+      const res = await fetch(`/api/v1/cash-registers/pairing-status/${cleanCode}`);
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+
+    const cached = localStorage.getItem(`xion_pos_paired_${cleanCode}`);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+    return { status: 'PENDING', pairing_code: cleanCode };
+  },
+
+  async getPendingCashRegisterRequests(): Promise<CashRegisterPairingRequest[]> {
+    try {
+      const res = await fetch('/api/v1/cash-registers/pending-requests', {
+        headers: authHeaders()
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+    return [];
+  },
+
+  async approveCashRegisterRequest(
+    pairingCode: string,
+    branchId: string,
+    name?: string,
+    businessId?: string
+  ): Promise<{ status: string; message: string; cash_register: CashRegister; device_token_preview?: string }> {
+    const cleanCode = pairingCode.replace(/\D/g, '').trim();
+    const res = await fetch('/api/v1/cash-registers/approve-request', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        pairing_code: cleanCode,
+        branch_id: branchId,
+        name: name?.trim(),
+        business_id: businessId
+      })
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      const err: any = new Error(errData.detail || 'Error al autorizar la terminal POS');
+      err.status = res.status;
+      throw err;
+    }
+    const data = await res.json();
+    return data;
+  },
+
+  async rejectCashRegisterRequest(pairingCode: string): Promise<{ message: string; status: string }> {
+    const cleanCode = pairingCode.replace(/\D/g, '').trim();
+    const res = await fetch('/api/v1/cash-registers/reject-request', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ pairing_code: cleanCode })
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+    return { message: 'Solicitud descartada', status: 'REJECTED' };
+  },
+
+  async revokeCashRegisterDevice(registerId: string): Promise<CashRegister> {
+    try {
+      const res = await fetch(`/api/v1/cash-registers/${registerId}/revoke-device`, {
+        method: 'POST',
+        headers: authHeaders()
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.cash_register;
+      }
+    } catch {}
+
+    // Fallback local en memoria
     mockCashRegisters = mockCashRegisters.map(r => {
-      if (r.id === id) {
+      if (r.id === registerId) {
         return {
           ...r,
           device_paired: false,
           device_token_preview: undefined,
+          paired_at: undefined,
           status: 'CLOSED',
           current_operator: undefined
         };
       }
       return r;
     });
-    return mockCashRegisters.find(r => r.id === id) || (mockCashRegisters[0] as CashRegister);
+    return mockCashRegisters.find(r => r.id === registerId) || (mockCashRegisters[0] as CashRegister);
+  },
+
+  // Flujo Smart TV / 6 Dígitos (Retrocompatibilidad transparente)
+  async pairTerminalWithCode(pairingCode: string, branchId: string, name: string): Promise<CashRegister> {
+    try {
+      const result = await this.approveCashRegisterRequest(pairingCode, branchId, name);
+      return result.cash_register;
+    } catch {
+      // Fallback local si el backend no responde
+      const cleanCode = pairingCode.replace(/\D/g, '').trim() || pairingCode.toUpperCase().trim();
+      const branch = mockBranches.find(b => b.id === branchId) || mockBranches[0];
+      const newRegister: CashRegister = {
+        id: `reg-${Date.now()}`,
+        branch_id: branch.id,
+        branch_name: branch.name,
+        name: name.trim() || `Caja ${cleanCode}`,
+        hardware_uuid: `HW-POS-${cleanCode}-${Date.now().toString().slice(-4)}`,
+        status: 'CLOSED',
+        is_active: true,
+        today_sales_total: 0.0,
+        allowed_user_ids: ['usr-admin-01', 'usr-cashier-01'],
+        payment_methods: ['CASH_USD', 'CASH_BS', 'PAGO_MOVIL', 'DEBIT_CARD'],
+        latitude: branch.latitude || 10.6417,
+        longitude: branch.longitude || -71.6125,
+        location_name: `Terminal Autorizada (${cleanCode})`,
+        created_at: new Date().toISOString(),
+        device_paired: true,
+        device_token_preview: `xion_dev_${cleanCode}`,
+        paired_at: new Date().toISOString()
+      };
+      mockCashRegisters = [...mockCashRegisters, newRegister];
+      return newRegister;
+    }
+  },
+
+  // Revocación Remota con 1 Clic (Retrocompatibilidad transparente)
+  async revokeTerminalDevice(id: string): Promise<CashRegister> {
+    return await this.revokeCashRegisterDevice(id);
   },
 
   // Flujo de Vinculación de Personal con Código Numérico de 6 Dígitos y QR
