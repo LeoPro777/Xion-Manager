@@ -23,17 +23,12 @@ import {
   DollarSign,
   Tv,
   ShieldAlert,
-  KeyRound,
-  QrCode,
-  Copy,
-  Check,
-  RefreshCw
+  KeyRound
 } from 'lucide-react';
 import { api } from '../services/api';
 import { Branch, CashRegister, User, CashSessionSyncItem, PaymentMethod, CashRegisterPairingRequest } from '../types';
 import { LocationMapPicker, MapMarkerItem } from '../components/LocationMapPicker';
 import { LocationPickerModal } from '../components/LocationPickerModal';
-import { QrCodeSvg } from '../components/QrCodeSvg';
 
 export const BranchesPage: React.FC = () => {
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -72,15 +67,12 @@ export const BranchesPage: React.FC = () => {
   const [formRegLng, setFormRegLng] = useState('-71.6125');
   const [formRegLocationName, setFormRegLocationName] = useState('');
 
-  // Cash Register Pairing (6 Dígitos / QR) States
+  // Cash Register Pairing (6 Dígitos) States
   const [showPairingModal, setShowPairingModal] = useState(false);
-  const [pairingTab, setPairingTab] = useState<'ENTER_CODE' | 'INVITE_QR'>('ENTER_CODE');
   const [pairingCodeInput, setPairingCodeInput] = useState('');
   const [pairingBranchId, setPairingBranchId] = useState('');
   const [pairingTerminalName, setPairingTerminalName] = useState('');
   const [isPairing, setIsPairing] = useState(false);
-  const [copiedInviteCode, setCopiedInviteCode] = useState(false);
-  const [generatedInviteCode, setGeneratedInviteCode] = useState('842109');
 
   const [auditModalRegister, setAuditModalRegister] = useState<CashRegister | null>(null);
 
@@ -231,13 +223,11 @@ export const BranchesPage: React.FC = () => {
     setCashRegisters(cashRegisters.map(r => r.id === updated.id ? updated : r));
   };
 
-  // Cash Register Pairing (6 Dígitos / QR) Handlers
+  // Cash Register Pairing (6 Dígitos) Handlers
   const handleOpenPairingModal = () => {
-    setPairingTab('ENTER_CODE');
     setPairingBranchId(branches[0]?.id || '');
     setPairingCodeInput('');
     setPairingTerminalName('');
-    setGeneratedInviteCode(`${Math.floor(100000 + Math.random() * 900000)}`);
     setShowPairingModal(true);
   };
 
@@ -274,17 +264,6 @@ export const BranchesPage: React.FC = () => {
     } finally {
       setIsPairing(false);
     }
-  };
-
-  const handleGenerateNewInviteCode = () => {
-    setGeneratedInviteCode(`${Math.floor(100000 + Math.random() * 900000)}`);
-    setCopiedInviteCode(false);
-  };
-
-  const handleCopyInviteCode = () => {
-    navigator.clipboard.writeText(generatedInviteCode);
-    setCopiedInviteCode(true);
-    setTimeout(() => setCopiedInviteCode(false), 2000);
   };
 
   const handleConfirmPairing = async (e: React.FormEvent) => {
@@ -1338,7 +1317,7 @@ export const BranchesPage: React.FC = () => {
 
 
       {/* ========================================================
-          MODAL: VINCULAR CAJA POS (6 DÍGITOS / QR)
+          MODAL: VINCULAR CAJA POS (6 DÍGITOS)
       ======================================================== */}
       {showPairingModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
@@ -1349,8 +1328,8 @@ export const BranchesPage: React.FC = () => {
                   <Tv className="w-4 h-4 text-cyan-400" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-slate-100">Vincular Caja POS (6 Dígitos / QR)</h4>
-                  <p className="text-[11px] text-slate-400">Autoriza la PC física o terminal táctil sin exponer tu contraseña de dueño</p>
+                  <h4 className="text-sm font-bold text-slate-100">Vincular Caja POS</h4>
+                  <p className="text-[11px] text-slate-400">Autoriza la PC física o terminal táctil mediante su código de 6 dígitos</p>
                 </div>
               </div>
               <button onClick={() => setShowPairingModal(false)} className="text-slate-400 hover:text-white">
@@ -1358,171 +1337,81 @@ export const BranchesPage: React.FC = () => {
               </button>
             </div>
 
-            {/* Pestañas de Navegación del Modal */}
-            <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
-              <button
-                type="button"
-                onClick={() => setPairingTab('ENTER_CODE')}
-                className={`py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                  pairingTab === 'ENTER_CODE'
-                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <KeyRound className="w-3.5 h-3.5" />
-                <span>Ingresar Código</span>
-              </button>
+            {/* FORMULARIO DE CÓDIGO DIRECTO */}
+            <form onSubmit={handleConfirmPairing} className="space-y-3.5 text-xs">
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-center space-y-2">
+                <label className="block text-slate-300 font-bold text-xs uppercase tracking-wider">
+                  Código Mostrado en la Pantalla de la Terminal POS
+                </label>
+                <p className="text-[11px] text-slate-400">
+                  Escribe los 6 dígitos numéricos que muestra la terminal física:
+                </p>
+                <input
+                  type="text"
+                  maxLength={6}
+                  placeholder="123456"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  autoFocus
+                  value={pairingCodeInput}
+                  onChange={(e) => setPairingCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  className="w-full max-w-[200px] mx-auto text-center font-mono text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-xl py-2 px-3 text-cyan-400 focus:outline-none focus:border-cyan-400 block"
+                />
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setPairingTab('INVITE_QR')}
-                className={`py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                  pairingTab === 'INVITE_QR'
-                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <QrCode className="w-3.5 h-3.5" />
-                <span>Invitar QR</span>
-              </button>
-            </div>
-
-            {/* TAB: INGRESAR CÓDIGO MANUAL */}
-            {pairingTab === 'ENTER_CODE' && (
-              <form onSubmit={handleConfirmPairing} className="space-y-3.5 text-xs">
-                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-center space-y-2">
-                  <label className="block text-slate-300 font-bold text-xs uppercase tracking-wider">
-                    Código Mostrado en la Pantalla de la Terminal POS
-                  </label>
-                  <p className="text-[11px] text-slate-400">
-                    Escribe los 6 dígitos numéricos que muestra la terminal física:
-                  </p>
-                  <input
-                    type="text"
-                    maxLength={6}
-                    placeholder="123456"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    autoFocus
-                    value={pairingCodeInput}
-                    onChange={(e) => setPairingCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    className="w-full max-w-[200px] mx-auto text-center font-mono text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-xl py-2 px-3 text-cyan-400 focus:outline-none focus:border-cyan-400 block"
-                  />
-                </div>
-
-                <div className="space-y-2.5">
-                  <div>
-                    <label className="block text-slate-400 font-semibold mb-1">Sucursal de Destino *</label>
-                    <select
-                      value={pairingBranchId || branches[0]?.id}
-                      onChange={e => setPairingBranchId(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
-                    >
-                      {branches.map(b => (
-                        <option key={b.id} value={b.id}>{b.name} ({b.address.slice(0, 30)}...)</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-400 font-semibold mb-1">Nombre Descriptivo de la Caja *</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Ej: Caja Principal - Pasillo 1"
-                      value={pairingTerminalName}
-                      onChange={e => setPairingTerminalName(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
-                    />
-                  </div>
-                </div>
-
-                {/* Security Benefit Callout */}
-                <div className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-300">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>
-                    <strong>Máxima Seguridad:</strong> La terminal física recibirá un <em>Device Token</em> permanente ligado al hardware. Los cajeros sólo necesitarán su PIN numérico para abrir turno, y puedes revocar el acceso a esta máquina remotamente en cualquier momento.
-                  </span>
-                </div>
-
-                {/* Action Buttons */}
-                <div className="pt-2 border-t border-slate-800 flex justify-end gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setShowPairingModal(false)}
-                    className="px-4 py-2 rounded-xl bg-slate-900 text-slate-400 hover:bg-slate-800 font-semibold text-xs"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isPairing || pairingCodeInput.length !== 6}
-                    className="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-lg shadow-emerald-500/20 active:scale-95 disabled:opacity-50"
-                  >
-                    {isPairing ? 'Autorizando Equipo...' : 'Autorizar y Vincular Equipo'}
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {/* TAB 3: INVITAR POR QR */}
-            {pairingTab === 'INVITE_QR' && (
-              <div className="space-y-4 text-center">
-                <div className="space-y-1">
-                  <h5 className="text-sm font-bold text-white">Código QR de Vinculación de Caja POS</h5>
-                  <p className="text-xs text-slate-400">
-                    Escanea este código desde la app Xion-POS para vincular la caja al instante:
-                  </p>
-                </div>
-
-                <div className="flex flex-col items-center justify-center gap-3 py-2">
-                  <QrCodeSvg
-                    value={`xion://pair-pos?code=${generatedInviteCode}&branch=${pairingBranchId || branches[0]?.id}`}
-                    size={160}
-                    logoText="POS"
-                  />
-
-                  <div className="inline-flex items-center gap-3 p-2.5 px-4 rounded-xl bg-slate-900 border border-cyan-500/40">
-                    <span className="font-mono text-2xl font-black text-cyan-400 tracking-widest">{generatedInviteCode}</span>
-                    <button
-                      type="button"
-                      onClick={handleCopyInviteCode}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
-                      title="Copiar código"
-                    >
-                      {copiedInviteCode ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleGenerateNewInviteCode}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
-                      title="Generar otro código"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="text-left">
-                  <label className="block text-slate-400 text-xs font-semibold mb-1">Sucursal a Asignar:</label>
+              <div className="space-y-2.5">
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">Sucursal de Destino *</label>
                   <select
                     value={pairingBranchId || branches[0]?.id}
-                    onChange={(e) => setPairingBranchId(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 text-xs font-semibold"
+                    onChange={e => setPairingBranchId(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
                   >
                     {branches.map(b => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
+                      <option key={b.id} value={b.id}>{b.name} ({b.address.slice(0, 30)}...)</option>
                     ))}
                   </select>
                 </div>
 
-                <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-400 text-left">
-                  <p>
-                    💡 Abre <strong>Xion POS</strong> en tu terminal física. En la pantalla inicial de bienvenida o configuración, escanea este código o ingresa los 6 dígitos para enlazar la terminal a esta sucursal.
-                  </p>
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">Nombre Descriptivo de la Caja *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ej: Caja Principal - Pasillo 1"
+                    value={pairingTerminalName}
+                    onChange={e => setPairingTerminalName(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
+                  />
                 </div>
               </div>
-            )}
+
+              {/* Security Benefit Callout */}
+              <div className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-300">
+                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Máxima Seguridad:</strong> La terminal física recibirá un <em>Device Token</em> permanente ligado al hardware. Los cajeros sólo necesitarán su PIN numérico para abrir turno, y puedes revocar el acceso a esta máquina remotamente en cualquier momento.
+                </span>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 border-t border-slate-800 flex justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowPairingModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-900 text-slate-400 hover:bg-slate-800 font-semibold text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isPairing || pairingCodeInput.length !== 6}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-lg shadow-emerald-500/20 active:scale-95 disabled:opacity-50"
+                >
+                  {isPairing ? 'Autorizando Equipo...' : 'Autorizar y Vincular Equipo'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

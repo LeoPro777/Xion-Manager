@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Users as UsersIcon, UserCheck, UserX, Plus, Shield, CheckCircle2, 
-  Clock, AlertCircle, QrCode, KeyRound, X, Copy, Check, Store,
-  Smartphone, RefreshCw, Sparkles, Trash2, ArrowRight, Edit, Sliders, Save
+  Clock, AlertCircle, KeyRound, X, Store,
+  Smartphone, Sparkles, Trash2, ArrowRight, Edit, Sliders, Save
 } from 'lucide-react';
 import { api } from '../services/api';
 import { User, Role, Branch } from '../types';
-import { QrCodeSvg } from '../components/QrCodeSvg';
 
 export const UsersPage: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
@@ -23,15 +22,12 @@ export const UsersPage: React.FC = () => {
   const [editIsActive, setEditIsActive] = useState<boolean>(true);
   const [isSavingUser, setIsSavingUser] = useState(false);
 
-  // Modal de Vinculación de Personal (Código Numérico de 6 Dígitos / QR)
+  // Modal de Vinculación de Personal (Código Numérico de 6 Dígitos)
   const [showPairingModal, setShowPairingModal] = useState(false);
-  const [pairingTab, setPairingTab] = useState<'ENTER_CODE' | 'INVITE_QR'>('ENTER_CODE');
   const [pairingInputCode, setPairingInputCode] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState('');
   const [selectedRole, setSelectedRole] = useState<Role>('CASHIER');
   const [isApproving, setIsApproving] = useState(false);
-  const [copiedInviteCode, setCopiedInviteCode] = useState(false);
-  const [generatedInviteCode, setGeneratedInviteCode] = useState('842109');
 
   useEffect(() => {
     api.getUsers().then(setUsers);
@@ -79,20 +75,8 @@ export const UsersPage: React.FC = () => {
   };
 
   const handleOpenPairingModal = () => {
-    setPairingTab('ENTER_CODE');
     setPairingInputCode('');
     setShowPairingModal(true);
-  };
-
-  const handleGenerateNewInviteCode = () => {
-    const randomNum = Math.floor(100000 + Math.random() * 900000);
-    setGeneratedInviteCode(randomNum.toString());
-  };
-
-  const handleCopyInviteCode = () => {
-    navigator.clipboard.writeText(generatedInviteCode);
-    setCopiedInviteCode(true);
-    setTimeout(() => setCopiedInviteCode(false), 2000);
   };
 
   const handleApprovePairingCode = async (code: string, branchId?: string, roleOverride?: Role) => {
@@ -461,7 +445,7 @@ export const UsersPage: React.FC = () => {
                 </div>
                 <div>
                   <h4 className="text-sm font-bold text-slate-100">Vincular Personal al Negocio</h4>
-                  <p className="text-[11px] text-slate-400">Enlace seguro de colaboradores mediante código o QR</p>
+                  <p className="text-[11px] text-slate-400">Enlace seguro de colaboradores mediante código de 6 dígitos</p>
                 </div>
               </div>
               <button 
@@ -472,149 +456,82 @@ export const UsersPage: React.FC = () => {
               </button>
             </div>
 
-            {/* Modal Sub-Tabs */}
-            <div className="grid grid-cols-2 p-1 rounded-xl bg-slate-950 border border-slate-800 text-xs font-bold">
-              <button
-                type="button"
-                onClick={() => setPairingTab('ENTER_CODE')}
-                className={`py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                  pairingTab === 'ENTER_CODE'
-                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <KeyRound className="w-3.5 h-3.5" />
-                <span>Ingresar Código</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setPairingTab('INVITE_QR')}
-                className={`py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                  pairingTab === 'INVITE_QR'
-                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <QrCode className="w-3.5 h-3.5" />
-                <span>Invitar QR</span>
-              </button>
-            </div>
-
-            {/* TAB: INGRESAR CÓDIGO */}
-            {pairingTab === 'ENTER_CODE' && (
-              <div className="space-y-3.5 text-xs">
-                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-center space-y-2">
-                  <label className="block text-slate-300 font-bold text-xs uppercase tracking-wider">
-                    Código Mostrado por el Colaborador
-                  </label>
-                  <p className="text-[11px] text-slate-400">
-                    Escribe los 6 dígitos numéricos de la pantalla del colaborador:
-                  </p>
-                  <input
-                    type="text"
-                    maxLength={6}
-                    placeholder="123456"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={pairingInputCode}
-                    onChange={(e) => setPairingInputCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    className="w-full max-w-[200px] mx-auto text-center font-mono text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-xl py-2 px-3 text-cyan-400 focus:outline-none focus:border-cyan-400 block"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block text-slate-400 font-semibold mb-1">Rol Operativo</label>
-                    <select
-                      value={selectedRole}
-                      onChange={(e) => setSelectedRole(e.target.value as Role)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
-                    >
-                      <option value="SUPERVISOR">Almacén / Inventario</option>
-                      <option value="BRANCH_MANAGER">Gerente de Sucursal</option>
-                      <option value="AUDITOR">Contador / Auditor Fiscal</option>
-                      <option value="CASHIER">Cajero POS</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-400 font-semibold mb-1">Sucursal Asignada</label>
-                    <select
-                      value={selectedBranchId}
-                      onChange={(e) => setSelectedBranchId(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
-                    >
-                      {branches.map(b => (
-                        <option key={b.id} value={b.id}>{b.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="pt-2 flex flex-col sm:flex-row items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowPairingModal(false)}
-                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-slate-900 text-slate-400 hover:bg-slate-800 font-semibold text-xs"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isApproving || !pairingInputCode.trim()}
-                    onClick={() => handleApprovePairingCode(pairingInputCode)}
-                    className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/20 disabled:opacity-50"
-                  >
-                    {isApproving ? 'Autorizando...' : 'Autorizar y Vincular'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* TAB 3: INVITAR MEDIANTE QR */}
-            {pairingTab === 'INVITE_QR' && (
-              <div className="space-y-4 text-center">
-                <div className="space-y-1">
-                  <h5 className="text-sm font-bold text-white">Código QR de Invitación</h5>
-                  <p className="text-xs text-slate-400">
-                    Muestra este código para que el colaborador lo escanee con su app o móvil:
-                  </p>
-                </div>
-
-                <div className="flex flex-col items-center justify-center gap-3 py-2">
-                  <QrCodeSvg
-                    value={`xion://pair-staff?code=${generatedInviteCode}&branch=${selectedBranchId}&role=${selectedRole}`}
-                    size={160}
-                    logoText={selectedRole === 'BRANCH_MANAGER' ? 'GER' : selectedRole === 'AUDITOR' ? 'CON' : 'ALM'}
-                  />
-
-                  <div className="inline-flex items-center gap-3 p-2.5 px-4 rounded-xl bg-slate-900 border border-cyan-500/40">
-                    <span className="font-mono text-2xl font-black text-cyan-400 tracking-widest">{generatedInviteCode}</span>
-                    <button
-                      type="button"
-                      onClick={handleCopyInviteCode}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
-                      title="Copiar código"
-                    >
-                      {copiedInviteCode ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleGenerateNewInviteCode}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
-                      title="Generar otro código"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                <p className="text-[11px] text-slate-500">
-                  Una vez el colaborador ingrese el código, el sistema completará la vinculación automáticamente.
+            {/* Formulario de Código de 6 Dígitos */}
+            <form 
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!isApproving && pairingInputCode.trim().length === 6) {
+                  handleApprovePairingCode(pairingInputCode);
+                }
+              }} 
+              className="space-y-3.5 text-xs"
+            >
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-center space-y-2">
+                <label className="block text-slate-300 font-bold text-xs uppercase tracking-wider">
+                  Código Mostrado por el Colaborador
+                </label>
+                <p className="text-[11px] text-slate-400">
+                  Escribe los 6 dígitos numéricos de la pantalla del colaborador:
                 </p>
+                <input
+                  type="text"
+                  maxLength={6}
+                  placeholder="123456"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  autoFocus
+                  value={pairingInputCode}
+                  onChange={(e) => setPairingInputCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  className="w-full max-w-[200px] mx-auto text-center font-mono text-3xl font-black tracking-widest bg-slate-900 border-2 border-cyan-500/60 rounded-xl py-2 px-3 text-cyan-400 focus:outline-none focus:border-cyan-400 block"
+                />
               </div>
-            )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">Rol Operativo</label>
+                  <select
+                    value={selectedRole}
+                    onChange={(e) => setSelectedRole(e.target.value as Role)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
+                  >
+                    <option value="SUPERVISOR">Almacén / Inventario</option>
+                    <option value="BRANCH_MANAGER">Gerente de Sucursal</option>
+                    <option value="AUDITOR">Contador / Auditor Fiscal</option>
+                    <option value="CASHIER">Cajero POS</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">Sucursal Asignada</label>
+                  <select
+                    value={selectedBranchId}
+                    onChange={(e) => setSelectedBranchId(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-slate-100 font-semibold"
+                  >
+                    {branches.map(b => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="pt-2 flex flex-col sm:flex-row items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPairingModal(false)}
+                  className="w-full sm:w-auto px-4 py-2 rounded-xl bg-slate-900 text-slate-400 hover:bg-slate-800 font-semibold text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isApproving || pairingInputCode.trim().length !== 6}
+                  className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/20 disabled:opacity-50"
+                >
+                  {isApproving ? 'Autorizando...' : 'Autorizar y Vincular'}
+                </button>
+              </div>
+            </form>
 
           </div>
         </div>
