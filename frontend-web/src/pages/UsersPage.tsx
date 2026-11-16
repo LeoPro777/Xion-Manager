@@ -9,7 +9,7 @@ import { User, Role, Branch } from '../types';
 
 export const UsersPage: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
-  const [filter, setFilter] = useState<'ALL' | 'APPROVED' | 'PENDING'>('ALL');
+  const [filter, setFilter] = useState<'ALL' | 'REJECTED'>('ALL');
   const [actionMsg, setActionMsg] = useState('');
   const [branches, setBranches] = useState<Branch[]>([]);
 
@@ -140,8 +140,7 @@ export const UsersPage: React.FC = () => {
   };
 
   const filteredUsers = users.filter(u => {
-    if (filter === 'APPROVED') return u.approval_status === 'APPROVED';
-    if (filter === 'PENDING') return u.approval_status === 'PENDING';
+    if (filter === 'REJECTED') return !u.is_active || u.approval_status === 'REJECTED';
     return true;
   });
 
@@ -172,21 +171,15 @@ export const UsersPage: React.FC = () => {
           <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-lg sm:rounded-xl border border-slate-800 text-xs font-semibold overflow-x-auto">
             <button
               onClick={() => setFilter('ALL')}
-              className={`px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-md sm:rounded-lg transition-all whitespace-nowrap text-xs ${filter === 'ALL' ? 'bg-cyan-500 text-white shadow-md' : 'text-slate-400'}`}
+              className={`px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-md sm:rounded-lg transition-all whitespace-nowrap text-xs ${filter === 'ALL' ? 'bg-cyan-500 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
             >
               Todos ({users.length})
             </button>
             <button
-              onClick={() => setFilter('PENDING')}
-              className={`px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-md sm:rounded-lg transition-all whitespace-nowrap text-xs ${filter === 'PENDING' ? 'bg-amber-500 text-white shadow-md' : 'text-amber-400'}`}
+              onClick={() => setFilter('REJECTED')}
+              className={`px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-md sm:rounded-lg transition-all whitespace-nowrap text-xs ${filter === 'REJECTED' ? 'bg-rose-500 text-white shadow-md' : 'text-slate-400 hover:text-rose-400'}`}
             >
-              Pendientes ({users.filter(u => u.approval_status === 'PENDING').length})
-            </button>
-            <button
-              onClick={() => setFilter('APPROVED')}
-              className={`px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-md sm:rounded-lg transition-all whitespace-nowrap text-xs ${filter === 'APPROVED' ? 'bg-emerald-500 text-white shadow-md' : 'text-slate-400'}`}
-            >
-              Aprobados
+              Rechazados ({users.filter(u => !u.is_active || u.approval_status === 'REJECTED').length})
             </button>
           </div>
 
@@ -195,7 +188,7 @@ export const UsersPage: React.FC = () => {
             className="px-3 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-cyan-500/20 active:scale-95 transition-all whitespace-nowrap"
           >
             <KeyRound className="w-3.5 h-3.5" />
-            <span>Vincular Personal (Código / QR)</span>
+            <span>Vincular</span>
           </button>
         </div>
       </div>
@@ -223,7 +216,9 @@ export const UsersPage: React.FC = () => {
             {filteredUsers.length === 0 ? (
               <tr>
                 <td colSpan={6} className="p-8 text-center text-slate-400 text-xs">
-                  No hay colaboradores registrados. Utiliza el botón "Vincular Personal" para agregar operadores.
+                  {filter === 'REJECTED'
+                    ? 'No hay colaboradores rechazados o con acceso revocado.'
+                    : 'No hay colaboradores registrados. Utiliza el botón "Vincular" para agregar operadores.'}
                 </td>
               </tr>
             ) : (
@@ -335,7 +330,9 @@ export const UsersPage: React.FC = () => {
       <div className="md:hidden space-y-3">
         {filteredUsers.length === 0 ? (
           <div className="glass-panel p-6 text-center text-slate-400 text-xs rounded-xl border border-slate-800">
-            No hay colaboradores registrados. Utiliza el botón "Vincular Personal" para agregar operadores.
+            {filter === 'REJECTED'
+              ? 'No hay colaboradores rechazados o con acceso revocado.'
+              : 'No hay colaboradores registrados. Utiliza el botón "Vincular" para agregar operadores.'}
           </div>
         ) : (
           filteredUsers.map((u) => {
