@@ -25,11 +25,10 @@ export const UsersPage: React.FC = () => {
 
   // Modal de Vinculación de Personal (Código Numérico de 6 Dígitos / QR)
   const [showPairingModal, setShowPairingModal] = useState(false);
-  const [pairingTab, setPairingTab] = useState<'PENDING' | 'ENTER_CODE' | 'INVITE_QR'>('PENDING');
+  const [pairingTab, setPairingTab] = useState<'ENTER_CODE' | 'INVITE_QR'>('ENTER_CODE');
   const [pairingInputCode, setPairingInputCode] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState('');
   const [selectedRole, setSelectedRole] = useState<Role>('CASHIER');
-  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [isApproving, setIsApproving] = useState(false);
   const [copiedInviteCode, setCopiedInviteCode] = useState(false);
   const [generatedInviteCode, setGeneratedInviteCode] = useState('842109');
@@ -39,10 +38,6 @@ export const UsersPage: React.FC = () => {
     api.getBranches().then(b => {
       setBranches(b);
       if (b.length > 0) setSelectedBranchId(b[0].id);
-    });
-    api.getPendingStaffPairingRequests().then(reqs => {
-      setPendingRequests(reqs);
-      if (reqs.length === 0) setPairingTab('ENTER_CODE');
     });
   }, []);
 
@@ -84,14 +79,8 @@ export const UsersPage: React.FC = () => {
   };
 
   const handleOpenPairingModal = () => {
-    api.getPendingStaffPairingRequests().then(reqs => {
-      setPendingRequests(reqs);
-      if (reqs.length > 0) {
-        setPairingTab('PENDING');
-      } else {
-        setPairingTab('ENTER_CODE');
-      }
-    });
+    setPairingTab('ENTER_CODE');
+    setPairingInputCode('');
     setShowPairingModal(true);
   };
 
@@ -116,7 +105,6 @@ export const UsersPage: React.FC = () => {
       const res = await api.approveStaffPairingRequest(code, activeBranch, targetRole, currentBizId);
       setActionMsg(res.message || `Personal autorizado exitosamente con código ${code}`);
       setUsers(await api.getUsers());
-      setPendingRequests(prev => prev.filter(p => p.pairing_code !== code));
       setShowPairingModal(false);
       setPairingInputCode('');
       setTimeout(() => setActionMsg(''), 4000);
@@ -126,15 +114,6 @@ export const UsersPage: React.FC = () => {
     } finally {
       setIsApproving(false);
     }
-  };
-
-  const handleRejectPairingRequest = async (code: string) => {
-    try {
-      await api.rejectStaffPairingRequest(code);
-      setPendingRequests(prev => prev.filter(p => p.pairing_code !== code));
-      setActionMsg(`Solicitud de vinculación ${code} descartada`);
-      setTimeout(() => setActionMsg(''), 3000);
-    } catch {}
   };
 
 
@@ -494,25 +473,7 @@ export const UsersPage: React.FC = () => {
             </div>
 
             {/* Modal Sub-Tabs */}
-            <div className="grid grid-cols-3 p-1 rounded-xl bg-slate-950 border border-slate-800 text-xs font-bold">
-              <button
-                type="button"
-                onClick={() => setPairingTab('PENDING')}
-                className={`py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                  pairingTab === 'PENDING'
-                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Clock className="w-3.5 h-3.5" />
-                <span>En Espera</span>
-                {pendingRequests.length > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-cyan-400 text-slate-950 text-[10px] font-black flex items-center justify-center">
-                    {pendingRequests.length}
-                  </span>
-                )}
-              </button>
-
+            <div className="grid grid-cols-2 p-1 rounded-xl bg-slate-950 border border-slate-800 text-xs font-bold">
               <button
                 type="button"
                 onClick={() => setPairingTab('ENTER_CODE')}
@@ -540,91 +501,7 @@ export const UsersPage: React.FC = () => {
               </button>
             </div>
 
-            {/* TAB 1: SOLICITUDES EN ESPERA */}
-            {pairingTab === 'PENDING' && (
-              <div className="space-y-3">
-                {pendingRequests.length > 0 ? (
-                  pendingRequests.map((req) => (
-                    <div key={req.pairing_code} className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono font-black text-cyan-400 text-base">{req.pairing_code}</span>
-                            <span className="text-white font-bold text-xs">{req.full_name}</span>
-                          </div>
-                          <span className="text-[11px] text-slate-400 block mt-0.5">
-                            Rol sugerido: <strong className="text-slate-200">{req.role}</strong> • {req.email || 'Solicitud móvil'}
-                          </span>
-                        </div>
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
-                          Pendiente
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        <select
-                          defaultValue={req.branch_id || selectedBranchId}
-                          onChange={(e) => { req.branch_id = e.target.value; }}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs"
-                        >
-                          {branches.map(b => (
-                            <option key={b.id} value={b.id}>{b.name}</option>
-                          ))}
-                        </select>
-
-                        <select
-                          defaultValue={req.role || selectedRole}
-                          onChange={(e) => { req.role = e.target.value as Role; }}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs"
-                        >
-                          <option value="SUPERVISOR">Almacén / Inventario</option>
-                          <option value="BRANCH_MANAGER">Gerente Sucursal</option>
-                          <option value="AUDITOR">Auditor Fiscal</option>
-                          <option value="CASHIER">Cajero POS</option>
-                        </select>
-                      </div>
-
-                      <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800/60">
-                        <button
-                          type="button"
-                          onClick={() => handleRejectPairingRequest(req.pairing_code)}
-                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 font-bold text-xs"
-                        >
-                          Descartar
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isApproving}
-                          onClick={() => handleApprovePairingCode(req.pairing_code, req.branch_id, req.role)}
-                          className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20"
-                        >
-                          {isApproving ? 'Autorizando...' : 'Aprobar y Vincular'}
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="py-8 text-center space-y-2">
-                    <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 mx-auto">
-                      <Clock className="w-6 h-6" />
-                    </div>
-                    <p className="text-xs font-bold text-slate-300">No hay solicitudes de vinculación pendientes</p>
-                    <p className="text-[11px] text-slate-400 max-w-xs mx-auto">
-                      Cuando un colaborador genere su código o escanee el QR, aparecerá aquí para tu aprobación inmediata.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setPairingTab('ENTER_CODE')}
-                      className="mt-2 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs font-bold"
-                    >
-                      Ingresar Código Manualmente →
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* TAB 2: INGRESAR CÓDIGO */}
+            {/* TAB: INGRESAR CÓDIGO */}
             {pairingTab === 'ENTER_CODE' && (
               <div className="space-y-3.5 text-xs">
                 <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-center space-y-2">

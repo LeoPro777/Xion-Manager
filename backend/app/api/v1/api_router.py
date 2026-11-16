@@ -2630,55 +2630,11 @@ async def list_pending_cash_register_requests(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Lista de solicitudes pendientes de terminales POS para el panel del Dueño en Sucursales.
-    Combina persistencia en PostgreSQL con memoria, descartando solicitudes expiradas.
+    Por política de seguridad estricta, las solicitudes pendientes no se exponen ni se listan.
+    La vinculación exige ingresar explícitamente el código numérico de 6 dígitos emitido en la terminal física.
     """
     verify_system_operational()
-    now = datetime.utcnow()
-    valid_requests = []
-
-    try:
-        from sqlalchemy import text
-        res = await db.execute(
-            text("""
-                SELECT id, pairing_code, hardware_uuid, device_name, client_version,
-                       branch_id, branch_name, name, status, created_at, expires_at
-                FROM cash_register_pairings
-                WHERE status = 'PENDING' AND expires_at > NOW()
-                ORDER BY created_at DESC
-            """)
-        )
-        for row in res.fetchall():
-            valid_requests.append({
-                "id": row[0],
-                "pairing_code": row[1],
-                "hardware_uuid": row[2] or "",
-                "device_name": row[3] or "Terminal POS",
-                "client_version": row[4] or "1.0.0",
-                "branch_id": row[5],
-                "branch_name": row[6] or "Pendiente de Asignación",
-                "name": row[7] or row[3] or "Caja POS",
-                "status": row[8],
-                "created_at": row[9].isoformat() if row[9] else None,
-                "expires_at": row[10].isoformat() if row[10] else None
-            })
-    except Exception:
-        pass
-
-    for p in cash_register_pairings_db:
-        if p.get("status") == "PENDING":
-            exp_str = p.get("expires_at")
-            if exp_str:
-                try:
-                    if datetime.fromisoformat(exp_str) < now:
-                        p["status"] = "EXPIRED"
-                        continue
-                except Exception:
-                    pass
-            if not any(v["pairing_code"] == p["pairing_code"] for v in valid_requests):
-                valid_requests.append(p)
-
-    return valid_requests
+    return []
 
 @api_router.post("/cash-registers/approve-request")
 @api_router.post("/cash-registers/confirm-pairing")
@@ -4076,45 +4032,11 @@ async def confirm_staff_pairing(
 @api_router.get("/staff/pending-requests")
 async def list_pending_staff_requests(db: AsyncSession = Depends(get_db)):
     """
-    Lista de solicitudes pendientes de personal para el panel del Dueño.
-    Combina persistencia en base de datos PostgreSQL con memoria para máxima resiliencia.
+    Por política de seguridad estricta, las solicitudes pendientes no se exponen ni se listan.
+    La vinculación exige ingresar explícitamente el código numérico de 6 dígitos emitido por el colaborador.
     """
     verify_system_operational()
-    now = datetime.utcnow()
-    valid_requests = []
-    try:
-        from sqlalchemy import text
-        res = await db.execute(text("SELECT pairing_code, user_id, email, full_name, phone, role, branch_id, branch_name, status, created_at, expires_at FROM staff_pairings WHERE status = 'PENDING' AND expires_at > NOW()"))
-        for row in res.fetchall():
-            valid_requests.append({
-                "pairing_code": row[0],
-                "user_id": row[1],
-                "email": row[2],
-                "full_name": row[3],
-                "phone": row[4] or "",
-                "role": row[5] or "CASHIER",
-                "branch_id": row[6],
-                "branch_name": row[7] or "Pendiente de Asignación",
-                "status": row[8],
-                "created_at": row[9].isoformat() if row[9] else None,
-                "expires_at": row[10].isoformat() if row[10] else None
-            })
-    except Exception:
-        pass
-
-    for s in staff_pairings_db:
-        if s.get("status") == "PENDING":
-            exp_str = s.get("expires_at")
-            if exp_str:
-                try:
-                    if datetime.fromisoformat(exp_str) < now:
-                        s["status"] = "EXPIRED"
-                        continue
-                except Exception:
-                    pass
-            if not any(v["pairing_code"] == s["pairing_code"] for v in valid_requests):
-                valid_requests.append(s)
-    return valid_requests
+    return []
 
 @api_router.post("/staff/approve-request")
 async def approve_staff_request(

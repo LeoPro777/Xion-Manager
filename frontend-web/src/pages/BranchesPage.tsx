@@ -74,30 +74,18 @@ export const BranchesPage: React.FC = () => {
 
   // Cash Register Pairing (6 Dígitos / QR) States
   const [showPairingModal, setShowPairingModal] = useState(false);
-  const [pairingTab, setPairingTab] = useState<'PENDING' | 'ENTER_CODE' | 'INVITE_QR'>('PENDING');
+  const [pairingTab, setPairingTab] = useState<'ENTER_CODE' | 'INVITE_QR'>('ENTER_CODE');
   const [pairingCodeInput, setPairingCodeInput] = useState('');
   const [pairingBranchId, setPairingBranchId] = useState('');
   const [pairingTerminalName, setPairingTerminalName] = useState('');
-  const [pendingCashRegisterRequests, setPendingCashRegisterRequests] = useState<CashRegisterPairingRequest[]>([]);
   const [isPairing, setIsPairing] = useState(false);
   const [copiedInviteCode, setCopiedInviteCode] = useState(false);
   const [generatedInviteCode, setGeneratedInviteCode] = useState('842109');
 
   const [auditModalRegister, setAuditModalRegister] = useState<CashRegister | null>(null);
 
-  const fetchPendingPairings = async () => {
-    try {
-      const reqs = await api.getPendingCashRegisterRequests();
-      setPendingCashRegisterRequests(reqs);
-      return reqs;
-    } catch {
-      return [];
-    }
-  };
-
   useEffect(() => {
     loadData();
-    fetchPendingPairings();
   }, []);
 
   const loadData = async () => {
@@ -244,13 +232,8 @@ export const BranchesPage: React.FC = () => {
   };
 
   // Cash Register Pairing (6 Dígitos / QR) Handlers
-  const handleOpenPairingModal = async () => {
-    const reqs = await fetchPendingPairings();
-    if (reqs.length > 0) {
-      setPairingTab('PENDING');
-    } else {
-      setPairingTab('ENTER_CODE');
-    }
+  const handleOpenPairingModal = () => {
+    setPairingTab('ENTER_CODE');
     setPairingBranchId(branches[0]?.id || '');
     setPairingCodeInput('');
     setPairingTerminalName('');
@@ -282,7 +265,6 @@ export const BranchesPage: React.FC = () => {
 
       const freshBrs = await api.getBranches();
       setBranches(freshBrs);
-      setPendingCashRegisterRequests(prev => prev.filter(p => p.pairing_code !== cleanCode));
       setShowPairingModal(false);
       setPairingCodeInput('');
       setPairingTerminalName('');
@@ -292,13 +274,6 @@ export const BranchesPage: React.FC = () => {
     } finally {
       setIsPairing(false);
     }
-  };
-
-  const handleRejectPairing = async (code: string) => {
-    try {
-      await api.rejectCashRegisterRequest(code);
-      setPendingCashRegisterRequests(prev => prev.filter(p => p.pairing_code !== code));
-    } catch {}
   };
 
   const handleGenerateNewInviteCode = () => {
@@ -438,16 +413,11 @@ export const BranchesPage: React.FC = () => {
           <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
             <button
               onClick={handleOpenPairingModal}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-lg sm:rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 transition-all relative"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-lg sm:rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 transition-all"
             >
               <Tv className="w-3.5 h-3.5" />
               <span className="hidden xs:inline">Vincular</span>
-              <span>Caja POS</span>
-              {pendingCashRegisterRequests.length > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
-                  {pendingCashRegisterRequests.length}
-                </span>
-              )}
+              <span>Caja POS (6 Dígitos)</span>
             </button>
 
             <button
@@ -1389,25 +1359,7 @@ export const BranchesPage: React.FC = () => {
             </div>
 
             {/* Pestañas de Navegación del Modal */}
-            <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
-              <button
-                type="button"
-                onClick={() => setPairingTab('PENDING')}
-                className={`py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                  pairingTab === 'PENDING'
-                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Clock className="w-3.5 h-3.5" />
-                <span>En Espera</span>
-                {pendingCashRegisterRequests.length > 0 && (
-                  <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
-                    {pendingCashRegisterRequests.length}
-                  </span>
-                )}
-              </button>
-
+            <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
               <button
                 type="button"
                 onClick={() => setPairingTab('ENTER_CODE')}
@@ -1435,94 +1387,7 @@ export const BranchesPage: React.FC = () => {
               </button>
             </div>
 
-            {/* TAB 1: SOLICITUDES EN ESPERA */}
-            {pairingTab === 'PENDING' && (
-              <div className="space-y-3">
-                {pendingCashRegisterRequests.length > 0 ? (
-                  pendingCashRegisterRequests.map((req) => (
-                    <div key={req.pairing_code} className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono font-black text-cyan-400 text-lg tracking-wider">{req.pairing_code}</span>
-                            <span className="text-white font-bold text-xs">{req.name || req.device_name || 'Terminal POS'}</span>
-                          </div>
-                          <span className="text-[11px] text-slate-400 block mt-0.5">
-                            Hardware: <strong className="text-slate-200 font-mono">{req.hardware_uuid || 'Dispositivo Físico'}</strong> • Versión {req.client_version || '1.0'}
-                          </span>
-                        </div>
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
-                          Pendiente
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        <div>
-                          <label className="block text-slate-400 text-[10px] font-semibold mb-1">Sucursal:</label>
-                          <select
-                            defaultValue={req.branch_id || pairingBranchId || branches[0]?.id}
-                            onChange={(e) => { req.branch_id = e.target.value; }}
-                            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs font-semibold"
-                          >
-                            {branches.map(b => (
-                              <option key={b.id} value={b.id}>{b.name}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block text-slate-400 text-[10px] font-semibold mb-1">Nombre de Caja:</label>
-                          <input
-                            type="text"
-                            defaultValue={req.name || req.device_name || `Caja ${req.pairing_code}`}
-                            onChange={(e) => { req.name = e.target.value; }}
-                            placeholder="Ej: Caja 1 - Pasillo Central"
-                            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs font-semibold"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800/60">
-                        <button
-                          type="button"
-                          onClick={() => handleRejectPairing(req.pairing_code)}
-                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 font-bold text-xs"
-                        >
-                          Descartar
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isPairing}
-                          onClick={() => handleApprovePairing(req.pairing_code, req.branch_id, req.name)}
-                          className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-500/20 disabled:opacity-50"
-                        >
-                          {isPairing ? 'Autorizando...' : 'Aprobar y Vincular'}
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="py-8 text-center space-y-2">
-                    <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 mx-auto">
-                      <Clock className="w-6 h-6" />
-                    </div>
-                    <p className="text-xs font-bold text-slate-300">No hay solicitudes de cajas pendientes</p>
-                    <p className="text-[11px] text-slate-400 max-w-xs mx-auto">
-                      Abre Xion-POS en la terminal física y solicita vinculación, o ingresa manualmente el código de 6 dígitos que muestra su pantalla.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setPairingTab('ENTER_CODE')}
-                      className="mt-2 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs font-bold"
-                    >
-                      Ingresar Código Manualmente →
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* TAB 2: INGRESAR CÓDIGO MANUAL */}
+            {/* TAB: INGRESAR CÓDIGO MANUAL */}
             {pairingTab === 'ENTER_CODE' && (
               <form onSubmit={handleConfirmPairing} className="space-y-3.5 text-xs">
                 <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-center space-y-2">
