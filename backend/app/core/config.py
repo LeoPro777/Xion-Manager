@@ -44,8 +44,7 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: Optional[str] = "926646602874-dakf4njbrmgg2fp4qokfflq7tlhid68j.apps.googleusercontent.com"
     GOOGLE_CLIENT_SECRET: Optional[str] = None
 
-    # Cloudflare R2 / S3-compatible Object Storage
-    STORAGE_BACKEND: str = "r2"  # "r2" | "local"
+    # Cloudflare R2 / S3-compatible Object Storage (Legacy / Alternate)
     LOCAL_STORAGE_PATH: str = "./uploads"
     R2_ACCOUNT_ID: Optional[str] = None
     R2_ACCESS_KEY_ID: Optional[str] = None

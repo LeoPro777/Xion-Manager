@@ -156,12 +156,13 @@ class SupabaseStorageService:
         base_url = (settings.SUPABASE_URL or "https://mock.supabase.co").rstrip("/")
         return f"{base_url}/storage/v1/object/public/{self.bucket_name}/{clean_path}"
 
-    def generate_presigned_url(self, path_or_url: str, expires_in: int = 900) -> str:
+    def generate_presigned_url(self, path_or_url: Optional[str] = None, expires_in: int = 900, key: Optional[str] = None) -> str:
         """
         Generates a temporary signed URL for private or sensitive assets.
-        Default expiration: 15 minutes (900 seconds).
+        Default expiration: 15 minutes (900 seconds). Accepts path_or_url or key.
         """
-        clean_path = self.extract_storage_path(path_or_url)
+        target = path_or_url or key or ""
+        clean_path = self.extract_storage_path(target)
         client = self.client
 
         if client is None:
@@ -178,19 +179,20 @@ class SupabaseStorageService:
             # Fallback to public URL if signed generation fails
             return self.get_public_url(clean_path)
 
-    def delete_file(self, path_or_url: Optional[str]) -> bool:
+    def delete_file(self, path_or_url: Optional[str] = None, key: Optional[str] = None) -> bool:
         """
         Safely deletes an object from Supabase Storage.
-        Also handles backward compatibility for legacy local disk paths safely.
+        Accepts path_or_url or key. Also handles backward compatibility for legacy local disk paths safely.
         """
-        if not path_or_url:
+        target = path_or_url or key
+        if not target:
             return True
 
         # Check if it was a legacy local file
-        if path_or_url.startswith("/static/") or path_or_url.startswith("/uploads/") or "uploads/" in path_or_url:
-            self._try_delete_local_file(path_or_url)
+        if target.startswith("/static/") or target.startswith("/uploads/") or "uploads/" in target:
+            self._try_delete_local_file(target)
 
-        clean_path = self.extract_storage_path(path_or_url)
+        clean_path = self.extract_storage_path(target)
         if not clean_path:
             return True
 
