@@ -2309,7 +2309,8 @@ async def list_cash_registers(
                 "device_paired": dev_paired,
                 "device_token_preview": tok_prev,
                 "paired_at": p_at,
-                "last_seen_at": ls_at
+                "last_seen_at": ls_at,
+                "payment_methods": existing.get("payment_methods") or ["CASH_USD", "CASH_BS", "PAGO_MOVIL", "DEBIT_CARD"]
             })
 
     registers = cash_registers_db

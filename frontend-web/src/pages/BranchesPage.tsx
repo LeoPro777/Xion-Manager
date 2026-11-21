@@ -783,11 +783,14 @@ export const BranchesPage: React.FC = () => {
                 <div className="mt-3">
                   <div className="text-[10px] text-slate-400 font-semibold mb-1.5">Métodos de Cobro Permitidos:</div>
                   <div className="flex flex-wrap gap-1">
-                    {r.payment_methods.map(m => (
+                    {(r.payment_methods || []).map(m => (
                       <span key={m} className="px-2 py-0.5 rounded-md bg-slate-900 border border-slate-800 text-[10px] font-semibold text-slate-300">
                         {m === 'CASH_USD' ? '$ Efectivo' : m === 'CASH_BS' ? 'Bs. Efectivo' : m === 'PAGO_MOVIL' ? 'Pago Móvil' : m === 'DEBIT_CARD' ? 'Tarjeta / POS' : m}
                       </span>
                     ))}
+                    {(!r.payment_methods || r.payment_methods.length === 0) && (
+                      <span className="text-[10px] text-slate-500 italic">Todos los métodos activos</span>
+                    )}
                   </div>
                 </div>
               </div>
