@@ -48,6 +48,8 @@ from app.models.entities import (
     Branch as BranchModel,
     CashRegister as CashRegisterModel,
     CashRegisterPairing as CashRegisterPairingModel,
+    Product as ProductModel,
+    Category as CategoryModel,
     BusinessSubscription
 )
 from app.core.security import create_access_token, decode_access_token, verify_google_id_token, get_password_hash, verify_password
@@ -2039,6 +2041,9 @@ branches_db: List[dict] = []
 
 cash_registers_db: List[dict] = []
 cash_register_pairings_db: List[dict] = []
+cash_sessions_db: List[dict] = []
+pos_synced_sales_db: List[dict] = []
+pos_processed_sale_uuids: set = set()
 
 # Rate Limiter y Rastreador de Intentos Fallidos en memoria para Vinculación (Máximo 5 intentos)
 pairing_rate_limit_store = defaultdict(list)
@@ -4286,7 +4291,7 @@ async def get_audit_logs(db: AsyncSession = Depends(get_db)):
 @api_router.get("/audit/cash-sessions")
 async def get_cash_sessions():
     verify_system_operational()
-    return []
+    return cash_sessions_db
 
 # 8. Notifications
 @api_router.get("/notifications")
@@ -4800,14 +4805,381 @@ async def report_payment(
         "status": "pending"
     }
 
-@api_router.post("/sync/pos-push", response_model=PosPushResponse)
-async def pos_push_sync(payload: PosPushPayload):
+# ==============================================================================
+# Xion-POS Realtime & Offline-First Synchronization Suite
+# ==============================================================================
+
+@api_router.get("/pos/sync/bootstrap")
+async def pos_sync_bootstrap(
+    authorization: Optional[str] = Header(None),
+    x_device_token: Optional[str] = Header(None),
+    cash_register_id: Optional[str] = Query(None),
+    branch_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Descarga inicial y actualización masiva para Xion POS (Bootstrap):
+    - Tasa de cambio oficial del negocio (Bs/USD)
+    - Datos del negocio y sucursal asignada
+    - Catálogo completo de productos con precios en USD y Bs
+    - Métodos de pago activos con URLs WebP
+    - Operadores/Cajeros autorizados para apertura de turno
+    """
     verify_system_operational()
+
+    # 1. Resolver token de dispositivo o usuario
+    token_str = x_device_token or authorization
+    claims = {}
+    if token_str:
+        clean_tok = token_str.replace("Bearer ", "").strip()
+        claims = decode_access_token(clean_tok) or {}
+
+    resolved_biz_id = claims.get("business_id") or "biz-101"
+    resolved_branch_id = branch_id or claims.get("branch_id")
+    resolved_cr_id = cash_register_id or claims.get("cash_register_id")
+
+    # 2. Sincronizar sucursales y cajas desde DB si la memoria está vacía
+    if not branches_db:
+        b_res = await db.execute(select(BranchModel))
+        for b in b_res.scalars().all():
+            branches_db.append({
+                "id": b.id, "business_id": b.business_id, "name": b.name,
+                "address": b.address, "phone": b.phone, "is_active": b.is_active
+            })
+
+    if not cash_registers_db:
+        cr_res = await db.execute(select(CashRegisterModel))
+        for c in cr_res.scalars().all():
+            cash_registers_db.append({
+                "id": c.id, "business_id": c.business_id, "branch_id": c.branch_id,
+                "name": c.name, "hardware_uuid": c.hardware_uuid, "status": "CLOSED",
+                "is_active": c.is_active, "today_sales_total": 0.0,
+                "last_seen_at": c.last_seen_at.isoformat() if c.last_seen_at else None
+            })
+
+    # Resolver sucursal objetivo
+    target_branch = None
+    if resolved_branch_id:
+        target_branch = next((b for b in branches_db if b["id"] == resolved_branch_id), None)
+    if not target_branch and branches_db:
+        target_branch = branches_db[0]
+        resolved_branch_id = target_branch["id"]
+
+    # Resolver caja objetivo
+    target_cr = None
+    if resolved_cr_id:
+        target_cr = next((c for c in cash_registers_db if c["id"] == resolved_cr_id), None)
+    if not target_cr and resolved_branch_id:
+        target_cr = next((c for c in cash_registers_db if c.get("branch_id") == resolved_branch_id), None)
+
+    # 3. Tasa de cambio de la tienda
+    store_rate = float(global_settings.get("current_exchange_rate_bs", 36.50))
+
+    # 4. Métodos de pago activos
+    active_payment_methods = [pm for pm in payment_methods_db if pm.get("is_active", True)]
+
+    # 5. Catálogo de productos para POS
+    pos_products = []
+    source_products = inventory_db if inventory_db else []
+    if not source_products:
+        # Fallback a PostgreSQL
+        prod_res = await db.execute(select(ProductModel).where(ProductModel.is_active == True))
+        for p in prod_res.scalars().all():
+            source_products.append({
+                "id": p.id, "sku": p.sku, "name": p.name, "barcode": p.barcode or p.sku,
+                "category": "General", "sale_price": p.sale_price, "tax_type": p.tax_type or "vat",
+                "unit_measure": p.unit_measure or "UND", "current_stock": p.current_stock or 0.0,
+                "image_url": p.image_url or "", "branch_id": p.branch_id
+            })
+
+    for p in source_products:
+        p_branch = p.get("branch_id")
+        # Incluir si pertenece a esta sucursal o es de inventario global
+        if not resolved_branch_id or not p_branch or p_branch == resolved_branch_id or p_branch == "global":
+            price_usd = float(p.get("sale_price") or 0.0)
+            price_bs = round(price_usd * store_rate, 2)
+            pos_products.append({
+                "id": p.get("id") or p.get("product_id"),
+                "product_id": p.get("product_id") or p.get("id"),
+                "sku": p.get("sku") or "",
+                "barcode": p.get("barcode") or p.get("sku") or "",
+                "name": p.get("name") or "Producto",
+                "description": p.get("description") or "",
+                "category": p.get("category") or "General",
+                "price_usd": price_usd,
+                "price_bs": price_bs,
+                "cost_price": float(p.get("cost_price") or 0.0),
+                "tax_type": p.get("tax_type") or "vat",
+                "tax_rate": 16.0 if p.get("tax_type") in ("vat", "iva") else 0.0,
+                "unit_measure": p.get("unit_measure") or "UND",
+                "current_stock": float(p.get("current_stock") or 0.0),
+                "image_url": p.get("image_url") or "",
+                "is_active": True
+            })
+
+    # 6. Operadores/Cajeros autorizados
+    operators = []
+    u_res = await db.execute(select(UserModel).where(UserModel.is_active == True))
+    for u in u_res.scalars().all():
+        u_role = u.role or "CASHIER"
+        u_branch = u.branch_id
+        if u_role in ("CASHIER", "SUPERVISOR", "BRANCH_MANAGER", "OWNER", "ADMIN"):
+            if not u_branch or u_branch in ("global", "all") or u_branch == resolved_branch_id:
+                operators.append({
+                    "id": u.id,
+                    "name": u.full_name or "Operador",
+                    "role": u_role,
+                    "email": u.email
+                })
+
+    return {
+        "status": "BOOTSTRAP_SUCCESS",
+        "server_timestamp": datetime.utcnow().isoformat(),
+        "business": {
+            "id": resolved_biz_id,
+            "name": global_settings.get("business_name") or "Xion Store",
+            "tax_id": global_settings.get("tax_id") or "J-12345678-0",
+            "currency": "USD",
+            "secondary_currency": "VES"
+        },
+        "branch": target_branch or {
+            "id": resolved_branch_id or "branch-1",
+            "name": "Sucursal Principal - Xion",
+            "address": "Sede Central"
+        },
+        "cash_register": target_cr or {
+            "id": resolved_cr_id or "pos-01",
+            "name": "Caja Principal",
+            "status": "OPEN"
+        },
+        "exchange_rate": {
+            "rate": store_rate,
+            "currency": "VES",
+            "base_currency": "USD",
+            "symbol": "Bs.",
+            "updated_at": global_settings.get("updated_at", datetime.utcnow()).isoformat() if hasattr(global_settings.get("updated_at"), "isoformat") else str(global_settings.get("updated_at"))
+        },
+        "payment_methods": active_payment_methods,
+        "categories": categories_db,
+        "products": pos_products,
+        "operators": operators
+    }
+
+
+@api_router.post("/pos/sync/push")
+@api_router.post("/sync/pos-push")
+async def pos_push_sync(
+    request: Request,
+    payload: dict = Body(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Sincronización bidireccional offline-first desde Xion POS:
+    - Recibe lote de ventas realizadas en la terminal POS.
+    - Idempotencia: previene duplicados por sale_uuid.
+    - Descuenta existencias en inventario en tiempo real.
+    - Acumula métricas de ventas y actualiza última conexión de la caja.
+    """
+    verify_system_operational()
+    cr_id = payload.get("cash_register_id")
+    sales = payload.get("sales", [])
+    turn_data = payload.get("turn_data") or {}
+    now_iso = datetime.utcnow().isoformat()
+
+    newly_synced_count = 0
+    total_sales_added = 0.0
+
+    for s in sales:
+        sale_uuid = str(s.get("sale_uuid") or s.get("id") or s.get("invoice_number") or uuid.uuid4())
+        if sale_uuid in pos_processed_sale_uuids:
+            continue
+
+        pos_processed_sale_uuids.add(sale_uuid)
+        pos_synced_sales_db.append(s)
+        newly_synced_count += 1
+
+        sale_total = float(s.get("total_usd") or s.get("amount") or s.get("total") or 0.0)
+        total_sales_added += sale_total
+
+        # Descontar stock de productos vendidos en el inventario
+        items = s.get("items", [])
+        for it in items:
+            p_id = it.get("product_id") or it.get("id")
+            p_qty = float(it.get("quantity") or it.get("qty") or 1.0)
+            for prod in inventory_db:
+                if prod.get("id") == p_id or prod.get("product_id") == p_id:
+                    prod["current_stock"] = max(0.0, float(prod.get("current_stock", 0.0)) - p_qty)
+                    break
+
+    # Actualizar caja registradora (ventas del día y pulso en línea)
+    if cr_id:
+        for cr in cash_registers_db:
+            if cr.get("id") == cr_id:
+                cr["today_sales_total"] = float(cr.get("today_sales_total", 0.0)) + total_sales_added
+                cr["last_seen_at"] = now_iso
+                break
+
+    # Registrar turno si fue enviado en la carga
+    if turn_data:
+        sess_id = turn_data.get("session_uuid") or payload.get("pos_session_uuid")
+        if sess_id:
+            existing_sess = next((ts for ts in cash_sessions_db if ts["id"] == sess_id), None)
+            if existing_sess:
+                existing_sess.update(turn_data)
+            else:
+                cash_sessions_db.insert(0, {
+                    "id": sess_id,
+                    "cash_register_name": turn_data.get("cash_register_name") or "Caja POS",
+                    "branch_name": turn_data.get("branch_name") or "Sucursal Principal",
+                    "opened_by": turn_data.get("opened_by") or "Cajero",
+                    "closed_by": turn_data.get("closed_by"),
+                    "opened_at": turn_data.get("opened_at") or now_iso,
+                    "closed_at": turn_data.get("closed_at"),
+                    "initial_cash": float(turn_data.get("initial_cash") or 0.0),
+                    "declared_cash": float(turn_data.get("declared_cash") or 0.0) if turn_data.get("declared_cash") is not None else None,
+                    "calculated_cash": float(turn_data.get("calculated_cash") or 0.0) if turn_data.get("calculated_cash") is not None else None,
+                    "difference": float(turn_data.get("difference") or 0.0),
+                    "status": turn_data.get("status") or "OPEN"
+                })
+
     return {
         "status": "SYNC_SUCCESS",
-        "synced_sales_count": len(payload.sales),
+        "synced_sales_count": len(sales),
+        "newly_processed_sales": newly_synced_count,
         "inventory_updated": True,
         "server_timestamp": datetime.utcnow()
+    }
+
+
+@api_router.post("/pos/sessions/open")
+async def pos_session_open(payload: dict = Body(...)):
+    """
+    Apertura de turno de caja desde Xion POS.
+    Registra monto inicial en efectivo y activa el estado de la caja a OPEN.
+    """
+    verify_system_operational()
+    cr_id = payload.get("cash_register_id")
+    sess_id = payload.get("session_uuid") or f"sess-{uuid.uuid4().hex[:8]}"
+    cashier = payload.get("cashier_name") or payload.get("opened_by") or "Cajero"
+    initial_cash = float(payload.get("initial_cash") or payload.get("opening_cash_usd") or 0.0)
+
+    cr_name = "Caja POS"
+    br_name = "Sucursal Principal"
+    if cr_id:
+        for cr in cash_registers_db:
+            if cr.get("id") == cr_id:
+                cr_name = cr.get("name", cr_name)
+                br_name = cr.get("branch_name", br_name)
+                cr["status"] = "OPEN"
+                cr["current_operator"] = cashier
+                cr["last_seen_at"] = datetime.utcnow().isoformat()
+                break
+
+    sess = {
+        "id": sess_id,
+        "cash_register_id": cr_id,
+        "cash_register_name": cr_name,
+        "branch_name": br_name,
+        "opened_by": cashier,
+        "closed_by": None,
+        "opened_at": payload.get("opened_at") or datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+        "closed_at": None,
+        "initial_cash": initial_cash,
+        "declared_cash": None,
+        "calculated_cash": None,
+        "difference": 0.0,
+        "status": "OPEN"
+    }
+
+    cash_sessions_db[:] = [s for s in cash_sessions_db if s["id"] != sess_id]
+    cash_sessions_db.insert(0, sess)
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Turno de caja abierto para {cashier}.",
+        "session": sess
+    }
+
+
+@api_router.post("/pos/sessions/close")
+async def pos_session_close(payload: dict = Body(...)):
+    """
+    Cierre de turno y arqueo de caja desde Xion POS.
+    Registra descuadres de caja y actualiza el estado de la terminal a CLOSED.
+    """
+    verify_system_operational()
+    sess_id = payload.get("session_uuid") or payload.get("id")
+    declared = float(payload.get("declared_cash") or 0.0)
+    calculated = float(payload.get("calculated_cash") or declared)
+    diff = float(payload.get("difference") if payload.get("difference") is not None else (declared - calculated))
+    closed_by = payload.get("closed_by") or payload.get("cashier_name") or "Cajero"
+    closed_at = payload.get("closed_at") or datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    cr_id = payload.get("cash_register_id")
+
+    sess = next((s for s in cash_sessions_db if s["id"] == sess_id), None)
+    if sess:
+        sess["closed_by"] = closed_by
+        sess["closed_at"] = closed_at
+        sess["declared_cash"] = declared
+        sess["calculated_cash"] = calculated
+        sess["difference"] = diff
+        sess["status"] = "CLOSED" if abs(diff) < 0.01 else "DISCREPANCY"
+    else:
+        sess = {
+            "id": sess_id or f"sess-{uuid.uuid4().hex[:8]}",
+            "cash_register_id": cr_id,
+            "cash_register_name": payload.get("cash_register_name") or "Caja POS",
+            "branch_name": payload.get("branch_name") or "Sucursal Principal",
+            "opened_by": payload.get("opened_by") or closed_by,
+            "closed_by": closed_by,
+            "opened_at": payload.get("opened_at") or closed_at,
+            "closed_at": closed_at,
+            "initial_cash": float(payload.get("initial_cash") or 0.0),
+            "declared_cash": declared,
+            "calculated_cash": calculated,
+            "difference": diff,
+            "status": "CLOSED" if abs(diff) < 0.01 else "DISCREPANCY"
+        }
+        cash_sessions_db.insert(0, sess)
+
+    if cr_id:
+        for cr in cash_registers_db:
+            if cr.get("id") == cr_id:
+                cr["status"] = "CLOSED"
+                cr["current_operator"] = None
+                cr["last_seen_at"] = datetime.utcnow().isoformat()
+                break
+
+    return {
+        "status": "SUCCESS",
+        "message": "Turno de caja cerrado y arqueo sincronizado exitosamente.",
+        "session": sess
+    }
+
+
+@api_router.post("/pos/heartbeat")
+async def pos_heartbeat(payload: dict = Body(...)):
+    """
+    Keep-alive / Pulso periódico de Xion POS:
+    Actualiza last_seen_at y sincroniza tasa de cambio actual.
+    """
+    verify_system_operational()
+    cr_id = payload.get("cash_register_id")
+    now_iso = datetime.utcnow().isoformat()
+    if cr_id:
+        for cr in cash_registers_db:
+            if cr.get("id") == cr_id:
+                cr["last_seen_at"] = now_iso
+                if "status" in payload:
+                    cr["status"] = payload["status"]
+                if "current_operator" in payload:
+                    cr["current_operator"] = payload["current_operator"]
+                break
+
+    return {
+        "status": "PONG",
+        "server_timestamp": now_iso,
+        "exchange_rate": float(global_settings.get("current_exchange_rate_bs", 36.50))
     }
 
 # ==========================================

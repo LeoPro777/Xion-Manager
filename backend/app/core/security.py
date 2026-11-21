@@ -23,7 +23,12 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
 
 def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
     try:
-        return jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        clean_token = token.strip()
+        if clean_token.startswith("xion_dev_"):
+            clean_token = clean_token[9:]
+        elif clean_token.startswith("Bearer "):
+            clean_token = clean_token[7:]
+        return jwt.decode(clean_token, settings.SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         return None
 
