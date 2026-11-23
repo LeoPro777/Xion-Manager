@@ -398,6 +398,7 @@ class StaffPairing(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
+
 class CashRegisterPairing(Base):
     __tablename__ = "cash_register_pairings"
 
@@ -415,6 +416,43 @@ class CashRegisterPairing(Base):
     device_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class Client(Base):
+    __tablename__ = "clients"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    identification_type: Mapped[str] = mapped_column(String(20), default="CI")
+    identification_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    credit_limit_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    current_debt: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    is_synced: Mapped[bool] = mapped_column(Boolean, default=False)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ClientReceivablesLedger(Base):
+    __tablename__ = "client_receivables_ledger"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    client_id: Mapped[str] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    sale_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    tx_type: Mapped[str] = mapped_column(String(20), default="CHARGE") # 'CHARGE', 'PAYMENT', 'DISCOUNT'
+    amount_usd: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    exchange_rate: Mapped[float] = mapped_column(Numeric(12, 4), default=1.0)
+    reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 
 
 

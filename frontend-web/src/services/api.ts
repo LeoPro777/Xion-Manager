@@ -31,7 +31,9 @@ import {
   XionPaySyncResponse,
   CategoryItem,
   StockAdjustmentDTO,
-  SupplierPayableLedgerItem
+  SupplierPayableLedgerItem,
+  Client,
+  ClientReceivableLedgerItem
 } from '../types';
 
 function authHeaders(extraHeaders: Record<string, string> = {}): Record<string, string> {
@@ -55,6 +57,52 @@ let mockShrinkages: InventoryShrinkage[] = [];
 let mockCategories: CategoryItem[] = [];
 
 let mockSupplierLedger: Record<string, SupplierPayableLedgerItem[]> = {};
+
+let mockClients: Client[] = [
+  {
+    id: 'cli-001',
+    name: 'Inversiones Los Andes C.A.',
+    email: 'contacto@losandes.com',
+    phone: '+58 414-1234567',
+    address: 'Av. Las Delicias, Maracay',
+    identification_type: 'RIF',
+    identification_number: 'J-30123456-7',
+    credit_limit: 500.0,
+    credit_limit_usd: 500.0,
+    current_debt: 120.50,
+    is_active: true,
+    created_at: new Date().toISOString()
+  },
+  {
+    id: 'cli-002',
+    name: 'Carlos Mendoza',
+    email: 'carlos.m@gmail.com',
+    phone: '+58 424-9876543',
+    address: 'Calle 4, Casa 12',
+    identification_type: 'CI',
+    identification_number: '18456789',
+    credit_limit: 250.0,
+    credit_limit_usd: 250.0,
+    current_debt: 0.0,
+    is_active: true,
+    created_at: new Date().toISOString()
+  }
+];
+
+let mockClientLedger: Record<string, ClientReceivableLedgerItem[]> = {
+  'cli-001': [
+    {
+      id: 'cxc-881',
+      client_id: 'cli-001',
+      sale_id: 'sale-5521',
+      tx_type: 'CHARGE',
+      amount_usd: 120.50,
+      exchange_rate: 36.50,
+      reference: 'Venta a Crédito Factura #1042',
+      created_at: new Date().toISOString()
+    }
+  ]
+};
 
 let mockBranches: Branch[] = [];
 
@@ -2354,6 +2402,207 @@ export const api = {
       plans_count: mockXionPayPlans.length,
       accounts_count: mockDestinationAccounts.length
     };
+  },
+
+  // 12. Clients & Accounts Receivable (CxC)
+  async getClients(search?: string, status?: string): Promise<Client[]> {
+    try {
+      const params = new URLSearchParams();
+      if (search) params.append('search', search);
+      if (status) params.append('status', status);
+      const url = `/api/v1/clients${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: authHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        mockClients = data;
+        return data;
+      }
+    } catch {
+      // offline fallback
+    }
+    let list = [...mockClients];
+    if (status === 'active') list = list.filter(c => c.is_active);
+    if (status === 'inactive') list = list.filter(c => !c.is_active);
+    if (status === 'with_debt') list = list.filter(c => c.current_debt > 0);
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(c => c.name.toLowerCase().includes(q) || c.identification_number.toLowerCase().includes(q) || (c.email && c.email.toLowerCase().includes(q)));
+    }
+    return list;
+  },
+
+  async getClient(id: string): Promise<Client | null> {
+    try {
+      const res = await fetch(`/api/v1/clients/${id}`, { headers: authHeaders() });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // offline fallback
+    }
+    return mockClients.find(c => c.id === id) || null;
+  },
+
+  async createClient(data: Partial<Client>): Promise<Client> {
+    const payload = {
+      name: data.name,
+      email: data.email,
+      phone: data.phone,
+      address: data.address,
+      identification_type: data.identification_type || 'CI',
+      identification_number: data.identification_number,
+      credit_limit: data.credit_limit ?? data.credit_limit_usd ?? 0,
+      credit_limit_usd: data.credit_limit ?? data.credit_limit_usd ?? 0,
+      is_active: data.is_active ?? true
+    };
+    try {
+      const res = await fetch('/api/v1/clients', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const created = await res.json();
+        mockClients = [created, ...mockClients];
+        return created;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Error al registrar cliente');
+      }
+    } catch (e: any) {
+      if (e.message && e.message !== 'Failed to fetch') {
+        throw e;
+      }
+    }
+    const cleanId = (data.identification_number || '000000').toUpperCase();
+    const newCli: Client = {
+      id: `cli-${Date.now()}`,
+      name: data.name || 'Cliente Local',
+      email: data.email || `${cleanId.toLowerCase()}@cliente.local`,
+      phone: data.phone || '',
+      address: data.address || '',
+      identification_type: data.identification_type || 'CI',
+      identification_number: cleanId,
+      credit_limit: Number(data.credit_limit || data.credit_limit_usd || 0),
+      credit_limit_usd: Number(data.credit_limit || data.credit_limit_usd || 0),
+      current_debt: 0,
+      is_active: data.is_active ?? true,
+      created_at: new Date().toISOString()
+    };
+    mockClients = [newCli, ...mockClients];
+    return newCli;
+  },
+
+  async updateClient(id: string, data: Partial<Client>): Promise<Client> {
+    try {
+      const res = await fetch(`/api/v1/clients/${id}`, {
+        method: 'PUT',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        mockClients = mockClients.map(c => c.id === id ? updated : c);
+        return updated;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Error al actualizar cliente');
+      }
+    } catch (e: any) {
+      if (e.message && e.message !== 'Failed to fetch') {
+        throw e;
+      }
+    }
+    mockClients = mockClients.map(c => c.id === id ? { ...c, ...data } : c);
+    return mockClients.find(c => c.id === id) || ({ id, name: data.name || 'Cliente' } as Client);
+  },
+
+  async deleteClient(id: string): Promise<void> {
+    try {
+      await fetch(`/api/v1/clients/${id}`, {
+        method: 'DELETE',
+        headers: authHeaders()
+      });
+    } catch {
+      // offline fallback
+    }
+    mockClients = mockClients.filter(c => c.id !== id);
+  },
+
+  async getClientLedger(clientId: string): Promise<ClientReceivableLedgerItem[]> {
+    try {
+      const res = await fetch(`/api/v1/clients/${clientId}/ledger`, { headers: authHeaders() });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // offline fallback
+    }
+    return mockClientLedger[clientId] || [];
+  },
+
+  async registerClientPayment(
+    clientId: string,
+    data: { amount_usd: number; exchange_rate?: number; payment_method?: string; reference?: string; notes?: string }
+  ): Promise<{ status: string; message: string; transaction: ClientReceivableLedgerItem; current_debt_usd: number }> {
+    try {
+      const res = await fetch(`/api/v1/clients/${clientId}/payments`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        const result = await res.json();
+        mockClients = mockClients.map(c => c.id === clientId ? { ...c, current_debt: result.current_debt_usd } : c);
+        return result;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Error al registrar abono');
+      }
+    } catch (e: any) {
+      if (e.message && e.message !== 'Failed to fetch') {
+        throw e;
+      }
+    }
+    const amt = Number(data.amount_usd);
+    const newTx: ClientReceivableLedgerItem = {
+      id: `cxc-${Date.now()}`,
+      client_id: clientId,
+      tx_type: 'PAYMENT',
+      amount_usd: amt,
+      exchange_rate: data.exchange_rate || 36.5,
+      reference: data.reference || 'Abono en Caja',
+      notes: data.notes || '',
+      created_at: new Date().toISOString()
+    };
+    mockClientLedger[clientId] = [newTx, ...(mockClientLedger[clientId] || [])];
+    let newDebt = 0;
+    mockClients = mockClients.map(c => {
+      if (c.id === clientId) {
+        newDebt = Math.max(0, c.current_debt - amt);
+        return { ...c, current_debt: newDebt };
+      }
+      return c;
+    });
+    return {
+      status: 'SUCCESS',
+      message: `Abono de $${amt.toFixed(2)} registrado exitosamente.`,
+      transaction: newTx,
+      current_debt_usd: newDebt
+    };
+  },
+
+  async getMaxClientCreditLimit(): Promise<number> {
+    try {
+      const res = await fetch('/api/v1/clients/config/credit-limit', { headers: authHeaders() });
+      if (res.ok) {
+        const d = await res.json();
+        return Number(d.max_client_credit_limit_usd || 1000.0);
+      }
+    } catch {
+      // offline fallback
+    }
+    return 1000.0;
   }
 };
 

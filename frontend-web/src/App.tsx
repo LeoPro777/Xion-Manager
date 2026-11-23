@@ -13,6 +13,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { PaymentMethodsPage } from './pages/PaymentMethodsPage';
 import { PaymentReportsPage } from './pages/PaymentReportsPage';
 import { PreferencesPage } from './pages/PreferencesPage';
+import { ClientsPage } from './pages/ClientsPage';
 import { OnboardingWizardModal } from './components/OnboardingWizardModal';
 import { AppLoadingScreen } from './components/AppLoadingScreen';
 import { PendingPairingScreen } from './components/PendingPairingScreen';
@@ -165,6 +166,8 @@ export const App: React.FC = () => {
         return <PaymentReportsPage />;
       case 'users':
         return <UsersPage />;
+      case 'clients':
+        return <ClientsPage />;
       case 'audit':
         return <AuditLogsPage />;
       case 'reports':

@@ -499,6 +499,38 @@ export interface XionPaySyncResponse {
   accounts_count: number;
 }
 
+export interface Client {
+  id: string;
+  business_id?: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  identification_type: 'CI' | 'RIF' | 'Pasaporte' | string;
+  identification_number: string;
+  credit_limit: number;
+  credit_limit_usd: number;
+  current_debt: number;
+  is_active: boolean;
+  version?: number;
+  is_synced?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ClientReceivableLedgerItem {
+  id: string;
+  client_id: string;
+  sale_id?: string;
+  tx_type: 'CHARGE' | 'PAYMENT' | 'DISCOUNT' | string;
+  amount_usd: number;
+  exchange_rate: number;
+  reference?: string;
+  notes?: string;
+  created_at: string;
+}
+
+
 
 
 

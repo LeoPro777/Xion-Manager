@@ -5,6 +5,7 @@ import {
   Package,
   ShoppingCart,
   Users,
+  UserCheck,
   ShieldCheck,
   FileSpreadsheet,
   CreditCard,
@@ -148,6 +149,7 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
     { id: 'payment-methods', label: 'Métodos de Pago', icon: Coins },
     { id: 'payment-reports', label: 'Reportes de Pago', icon: Receipt },
     { id: 'users', label: 'Usuarios y Accesos', icon: Users },
+    { id: 'clients', label: 'Clientes y Créditos', icon: UserCheck },
     { id: 'audit', label: 'Auditoría y Bitácoras', icon: ShieldCheck },
     { id: 'reports', label: 'Centro de Reportes', icon: FileSpreadsheet },
   ];
@@ -160,6 +162,7 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
     'payment-methods': 'Métodos de Pago',
     'payment-reports': 'Reportes de Pago',
     users: 'Usuarios y Accesos',
+    clients: 'Clientes y Créditos',
     audit: 'Auditoría y Bitácoras',
     reports: 'Centro de Reportes',
     billing: 'Mi Cuenta',

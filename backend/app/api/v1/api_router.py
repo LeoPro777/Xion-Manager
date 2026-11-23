@@ -22,7 +22,8 @@ from app.schemas.schemas import (
     StockAdjustmentDTO, CategoryCreate, CategoryResponse, SupplierPayableLedgerItem,
     GoogleAuthRequest, StandardLoginRequest, AuthTokenResponse,
     RegisterUserRequest, OnboardingCompleteRequest,
-    UserPreferenceUpdate, UserPreferenceResponse, UserSessionResponse, UserMeResponse
+    UserPreferenceUpdate, UserPreferenceResponse, UserSessionResponse, UserMeResponse,
+    ClientCreate, ClientUpdate, ClientResponse, ClientReceivablePaymentCreate, ClientLedgerResponse
 )
 from app.services.image_service import (
     save_and_process_payment_method_image,
@@ -35,7 +36,7 @@ from app.services.image_service import (
 )
 from app.services.storage_service import storage_service
 from app.services.xion_pay_service import XionPayService
-from sqlalchemy import select, update, or_, delete, func
+from sqlalchemy import select, update, or_, delete, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.entities import (
@@ -50,7 +51,9 @@ from app.models.entities import (
     CashRegisterPairing as CashRegisterPairingModel,
     Product as ProductModel,
     Category as CategoryModel,
-    BusinessSubscription
+    BusinessSubscription,
+    Client as ClientModel,
+    ClientReceivablesLedger as ClientReceivablesLedgerModel
 )
 from app.core.security import create_access_token, decode_access_token, verify_google_id_token, get_password_hash, verify_password
 
@@ -5706,4 +5709,493 @@ async def delete_cms_media_file(
         "status": "deleted" if success else "failed",
         "key": key
     }
+
+
+# ========================================================
+# 11. Clients & Accounts Receivable (CxC Ledger)
+# ========================================================
+
+clients_memory_db: List[dict] = []
+client_ledger_memory_db: List[dict] = []
+
+@api_router.get("/clients/config/credit-limit")
+async def get_client_credit_limit_config():
+    """
+    Retorna el tope global de crédito permitido para clientes en la tienda.
+    """
+    max_limit = float(global_settings.get("max_client_credit_limit_usd", 1000.0))
+    return {
+        "max_client_credit_limit_usd": max_limit,
+        "currency": "USD"
+    }
+
+@api_router.get("/clients", response_model=List[ClientResponse])
+async def list_clients(
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Listar clientes no eliminados pertenecientes al negocio.
+    Calcula deuda acumulada (current_debt) y admite búsqueda por nombre, email o identificación.
+    """
+    verify_system_operational()
+    current_user = await get_optional_current_user(authorization, db)
+    resolved_biz_id = current_user.business_id if current_user and current_user.business_id else "biz-25735853bd36"
+
+    clients_list = []
+    try:
+        stmt = (
+            select(ClientModel)
+            .where(ClientModel.business_id == resolved_biz_id, ClientModel.deleted_at == None)
+            .order_by(ClientModel.created_at.desc())
+        )
+        res = await db.execute(stmt)
+        db_clients = res.scalars().all()
+        for c in db_clients:
+            ledger_stmt = select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (ClientReceivablesLedgerModel.tx_type == 'CHARGE', ClientReceivablesLedgerModel.amount_usd),
+                            (ClientReceivablesLedgerModel.tx_type.in_(['PAYMENT', 'DISCOUNT']), -ClientReceivablesLedgerModel.amount_usd),
+                            else_=0.0
+                        )
+                    ),
+                    0.0
+                )
+            ).where(ClientReceivablesLedgerModel.client_id == c.id)
+            debt_res = await db.execute(ledger_stmt)
+            calculated_debt = float(debt_res.scalar() or c.current_debt or 0.0)
+
+            clients_list.append({
+                "id": c.id,
+                "business_id": c.business_id,
+                "name": c.name,
+                "email": c.email,
+                "phone": c.phone,
+                "address": c.address,
+                "identification_type": c.identification_type,
+                "identification_number": c.identification_number,
+                "credit_limit": float(c.credit_limit_usd or 0.0),
+                "credit_limit_usd": float(c.credit_limit_usd or 0.0),
+                "current_debt": max(0.0, calculated_debt),
+                "is_active": c.is_active,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "updated_at": c.updated_at.isoformat() if c.updated_at else None
+            })
+    except Exception:
+        clients_list = [c for c in clients_memory_db if c.get("business_id") == resolved_biz_id and not c.get("deleted_at")]
+
+    if status == 'active':
+        clients_list = [c for c in clients_list if c["is_active"] is True]
+    elif status == 'inactive':
+        clients_list = [c for c in clients_list if c["is_active"] is False]
+    elif status == 'with_debt':
+        clients_list = [c for c in clients_list if c["current_debt"] > 0]
+
+    if search and search.strip():
+        term = search.strip().lower()
+        clients_list = [
+            c for c in clients_list
+            if term in c["name"].lower()
+            or (c.get("email") and term in c["email"].lower())
+            or term in c["identification_number"].lower()
+        ]
+
+    return clients_list
+
+@api_router.post("/clients", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
+async def create_client(
+    payload: ClientCreate,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Crea un nuevo cliente en Xion-Manager.
+    """
+    verify_system_operational()
+    current_user = await get_optional_current_user(authorization, db)
+    resolved_biz_id = current_user.business_id if current_user and current_user.business_id else "biz-25735853bd36"
+
+    clean_name = payload.name.strip()
+    clean_id_number = payload.identification_number.strip().upper()
+    if len(clean_name) < 2:
+        raise HTTPException(status_code=400, detail="El nombre del cliente debe tener al menos 2 caracteres.")
+    if len(clean_id_number) < 5:
+        raise HTTPException(status_code=400, detail="El número de identificación debe tener al menos 5 caracteres.")
+
+    clean_email = payload.email.strip().lower() if payload.email and payload.email.strip() else f"{clean_id_number.lower()}@cliente.local"
+
+    req_credit = float(payload.credit_limit or payload.credit_limit_usd or 0.0)
+    if req_credit < 0:
+        raise HTTPException(status_code=400, detail="El límite de crédito no puede ser negativo.")
+    max_limit = float(global_settings.get("max_client_credit_limit_usd", 1000.0))
+    if req_credit > max_limit:
+        raise HTTPException(
+            status_code=400,
+            detail=f"El límite de crédito (${req_credit:.2f}) supera el tope global permitido por la empresa (${max_limit:.2f})."
+        )
+
+    try:
+        dup_chk = await db.execute(
+            select(ClientModel).where(
+                ClientModel.business_id == resolved_biz_id,
+                ClientModel.identification_number == clean_id_number,
+                ClientModel.deleted_at == None
+            )
+        )
+        if dup_chk.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ya existe un cliente registrado con el documento '{clean_id_number}'."
+            )
+
+        new_client = ClientModel(
+            id=f"cli-{uuid.uuid4().hex[:12]}",
+            business_id=resolved_biz_id,
+            name=clean_name,
+            email=clean_email,
+            phone=payload.phone.strip() if payload.phone else None,
+            address=payload.address.strip() if payload.address else None,
+            identification_type=payload.identification_type.strip().upper(),
+            identification_number=clean_id_number,
+            credit_limit_usd=req_credit,
+            current_debt=0.0,
+            is_active=payload.is_active,
+            version=1,
+            is_synced=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        db.add(new_client)
+        await db.commit()
+        await db.refresh(new_client)
+
+        client_dict = {
+            "id": new_client.id,
+            "business_id": new_client.business_id,
+            "name": new_client.name,
+            "email": new_client.email,
+            "phone": new_client.phone,
+            "address": new_client.address,
+            "identification_type": new_client.identification_type,
+            "identification_number": new_client.identification_number,
+            "credit_limit": float(new_client.credit_limit_usd or 0.0),
+            "credit_limit_usd": float(new_client.credit_limit_usd or 0.0),
+            "current_debt": 0.0,
+            "is_active": new_client.is_active,
+            "created_at": new_client.created_at.isoformat(),
+            "updated_at": new_client.updated_at.isoformat()
+        }
+        clients_memory_db.insert(0, client_dict)
+        return client_dict
+    except HTTPException:
+        raise
+    except Exception:
+        mem_id = f"cli-{uuid.uuid4().hex[:12]}"
+        client_dict = {
+            "id": mem_id,
+            "business_id": resolved_biz_id,
+            "name": clean_name,
+            "email": clean_email,
+            "phone": payload.phone,
+            "address": payload.address,
+            "identification_type": payload.identification_type,
+            "identification_number": clean_id_number,
+            "credit_limit": req_credit,
+            "credit_limit_usd": req_credit,
+            "current_debt": 0.0,
+            "is_active": payload.is_active,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        clients_memory_db.insert(0, client_dict)
+        return client_dict
+
+@api_router.get("/clients/{client_id}", response_model=ClientResponse)
+async def get_client(
+    client_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Obtener detalles de un cliente específico por ID.
+    """
+    verify_system_operational()
+    try:
+        res = await db.execute(select(ClientModel).where(ClientModel.id == client_id, ClientModel.deleted_at == None))
+        client = res.scalar_one_or_none()
+        if client:
+            return {
+                "id": client.id,
+                "business_id": client.business_id,
+                "name": client.name,
+                "email": client.email,
+                "phone": client.phone,
+                "address": client.address,
+                "identification_type": client.identification_type,
+                "identification_number": client.identification_number,
+                "credit_limit": float(client.credit_limit_usd or 0.0),
+                "credit_limit_usd": float(client.credit_limit_usd or 0.0),
+                "current_debt": float(client.current_debt or 0.0),
+                "is_active": client.is_active,
+                "created_at": client.created_at.isoformat() if client.created_at else None,
+                "updated_at": client.updated_at.isoformat() if client.updated_at else None
+            }
+    except Exception:
+        pass
+
+    mem = next((c for c in clients_memory_db if c["id"] == client_id and not c.get("deleted_at")), None)
+    if not mem:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado.")
+    return mem
+
+@api_router.put("/clients/{client_id}", response_model=ClientResponse)
+async def update_client(
+    client_id: str,
+    payload: ClientUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Actualiza datos de un cliente existente.
+    """
+    verify_system_operational()
+    max_limit = float(global_settings.get("max_client_credit_limit_usd", 1000.0))
+
+    try:
+        res = await db.execute(select(ClientModel).where(ClientModel.id == client_id, ClientModel.deleted_at == None))
+        client = res.scalar_one_or_none()
+        if not client:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado.")
+
+        if payload.name is not None:
+            if len(payload.name.strip()) < 2:
+                raise HTTPException(status_code=400, detail="El nombre debe tener al menos 2 caracteres.")
+            client.name = payload.name.strip()
+
+        if payload.identification_number is not None:
+            clean_id = payload.identification_number.strip().upper()
+            if len(clean_id) < 5:
+                raise HTTPException(status_code=400, detail="El documento debe tener al menos 5 caracteres.")
+            dup = await db.execute(
+                select(ClientModel).where(
+                    ClientModel.business_id == client.business_id,
+                    ClientModel.identification_number == clean_id,
+                    ClientModel.id != client_id,
+                    ClientModel.deleted_at == None
+                )
+            )
+            if dup.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail=f"Ya existe otro cliente con el documento '{clean_id}'.")
+            client.identification_number = clean_id
+
+        if payload.identification_type is not None:
+            client.identification_type = payload.identification_type.strip().upper()
+
+        if payload.email is not None:
+            client.email = payload.email.strip().lower() if payload.email.strip() else client.email
+
+        if payload.phone is not None:
+            client.phone = payload.phone.strip() if payload.phone.strip() else None
+
+        if payload.address is not None:
+            client.address = payload.address.strip() if payload.address.strip() else None
+
+        if payload.credit_limit is not None or payload.credit_limit_usd is not None:
+            new_credit = float(payload.credit_limit if payload.credit_limit is not None else payload.credit_limit_usd)
+            if new_credit < 0:
+                raise HTTPException(status_code=400, detail="El límite de crédito no puede ser negativo.")
+            if new_credit > max_limit:
+                raise HTTPException(status_code=400, detail=f"El límite de crédito no puede superar ${max_limit:.2f}.")
+            client.credit_limit_usd = new_credit
+
+        if payload.is_active is not None:
+            client.is_active = payload.is_active
+
+        client.updated_at = datetime.utcnow()
+        await db.commit()
+        await db.refresh(client)
+
+        resp = {
+            "id": client.id,
+            "business_id": client.business_id,
+            "name": client.name,
+            "email": client.email,
+            "phone": client.phone,
+            "address": client.address,
+            "identification_type": client.identification_type,
+            "identification_number": client.identification_number,
+            "credit_limit": float(client.credit_limit_usd or 0.0),
+            "credit_limit_usd": float(client.credit_limit_usd or 0.0),
+            "current_debt": float(client.current_debt or 0.0),
+            "is_active": client.is_active,
+            "created_at": client.created_at.isoformat() if client.created_at else None,
+            "updated_at": client.updated_at.isoformat() if client.updated_at else None
+        }
+        for i, c in enumerate(clients_memory_db):
+            if c["id"] == client_id:
+                clients_memory_db[i] = resp
+                break
+        return resp
+    except HTTPException:
+        raise
+    except Exception:
+        mem = next((c for c in clients_memory_db if c["id"] == client_id and not c.get("deleted_at")), None)
+        if not mem:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado.")
+        data = payload.model_dump(exclude_unset=True)
+        if "credit_limit" in data or "credit_limit_usd" in data:
+            c_val = float(data.get("credit_limit", data.get("credit_limit_usd", 0.0)))
+            if c_val > max_limit:
+                raise HTTPException(status_code=400, detail=f"El límite de crédito no puede superar ${max_limit:.2f}.")
+            mem["credit_limit"] = c_val
+            mem["credit_limit_usd"] = c_val
+        for k, v in data.items():
+            if k not in ("credit_limit", "credit_limit_usd"):
+                mem[k] = v
+        mem["updated_at"] = datetime.utcnow().isoformat()
+        return mem
+
+@api_router.delete("/clients/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_client(
+    client_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Eliminación lógica (Soft Delete) de cliente, preservando integridad histórica.
+    """
+    verify_system_operational()
+    try:
+        res = await db.execute(select(ClientModel).where(ClientModel.id == client_id, ClientModel.deleted_at == None))
+        client = res.scalar_one_or_none()
+        if client:
+            client.deleted_at = datetime.utcnow()
+            client.is_active = False
+            await db.commit()
+    except Exception:
+        pass
+
+    for c in clients_memory_db:
+        if c["id"] == client_id:
+            c["deleted_at"] = datetime.utcnow().isoformat()
+            c["is_active"] = False
+            break
+
+    return None
+
+@api_router.get("/clients/{client_id}/ledger", response_model=List[ClientLedgerResponse])
+async def get_client_ledger(
+    client_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retorna el historial contable del libro de cuentas por cobrar (CxC) del cliente.
+    """
+    verify_system_operational()
+    ledger_items = []
+    try:
+        stmt = (
+            select(ClientReceivablesLedgerModel)
+            .where(ClientReceivablesLedgerModel.client_id == client_id)
+            .order_by(ClientReceivablesLedgerModel.created_at.desc())
+        )
+        res = await db.execute(stmt)
+        items = res.scalars().all()
+        for it in items:
+            ledger_items.append({
+                "id": it.id,
+                "client_id": it.client_id,
+                "sale_id": it.sale_id,
+                "tx_type": it.tx_type,
+                "amount_usd": float(it.amount_usd or 0.0),
+                "exchange_rate": float(it.exchange_rate or 1.0),
+                "reference": it.reference,
+                "notes": it.notes,
+                "created_at": it.created_at.isoformat() if it.created_at else None
+            })
+    except Exception:
+        pass
+
+    if not ledger_items:
+        ledger_items = [it for it in client_ledger_memory_db if it["client_id"] == client_id]
+        ledger_items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+    return ledger_items
+
+@api_router.post("/clients/{client_id}/payments", status_code=status.HTTP_201_CREATED)
+async def register_client_payment(
+    client_id: str,
+    payload: ClientReceivablePaymentCreate,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Registra un abono/pago de deuda en el libro contable de CxC y descuenta el saldo pendiente del cliente.
+    """
+    verify_system_operational()
+    payment_amount = float(payload.amount_usd)
+    if payment_amount <= 0:
+        raise HTTPException(status_code=400, detail="El monto del abono debe ser mayor a 0.")
+
+    rate = float(payload.exchange_rate or global_settings.get("current_exchange_rate_bs", 36.5))
+    ref = payload.reference or f"Abono {payload.payment_method or 'CASH_USD'}"
+    notes = payload.notes or f"Pago registrado en Caja - Tasa: {rate:.2f} Bs/$"
+
+    ledger_id = f"cxc-{uuid.uuid4().hex[:10]}"
+    now_dt = datetime.utcnow()
+
+    updated_debt = 0.0
+    try:
+        res = await db.execute(select(ClientModel).where(ClientModel.id == client_id, ClientModel.deleted_at == None))
+        client = res.scalar_one_or_none()
+        if not client:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado.")
+
+        new_tx = ClientReceivablesLedgerModel(
+            id=ledger_id,
+            client_id=client_id,
+            sale_id=None,
+            tx_type="PAYMENT",
+            amount_usd=payment_amount,
+            exchange_rate=rate,
+            reference=ref,
+            notes=notes,
+            version=1,
+            created_at=now_dt
+        )
+        db.add(new_tx)
+
+        client.current_debt = max(0.0, float(client.current_debt or 0.0) - payment_amount)
+        client.updated_at = now_dt
+        await db.commit()
+        await db.refresh(client)
+        updated_debt = float(client.current_debt)
+    except HTTPException:
+        raise
+    except Exception:
+        mem = next((c for c in clients_memory_db if c["id"] == client_id), None)
+        if mem:
+            mem["current_debt"] = max(0.0, float(mem.get("current_debt", 0.0)) - payment_amount)
+            updated_debt = mem["current_debt"]
+
+    ledger_record = {
+        "id": ledger_id,
+        "client_id": client_id,
+        "sale_id": None,
+        "tx_type": "PAYMENT",
+        "amount_usd": payment_amount,
+        "exchange_rate": rate,
+        "reference": ref,
+        "notes": notes,
+        "created_at": now_dt.isoformat()
+    }
+    client_ledger_memory_db.insert(0, ledger_record)
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Abono de ${payment_amount:.2f} registrado exitosamente.",
+        "transaction": ledger_record,
+        "current_debt_usd": updated_debt
+    }
+
 

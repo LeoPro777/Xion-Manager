@@ -613,6 +613,82 @@ class UserMeResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+# ==========================================
+# Client & Accounts Receivable (CxC) Schemas
+# ==========================================
+
+class ClientCreate(BaseModel):
+    name: str = Field(..., min_length=2, description="Nombre o razón social del cliente")
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    identification_type: str = Field(default="CI", description="CI, RIF o Pasaporte")
+    identification_number: str = Field(..., min_length=5, description="Cédula, RIF o identificador")
+    credit_limit: Optional[float] = Field(default=0.0, ge=0)
+    credit_limit_usd: Optional[float] = Field(default=0.0, ge=0)
+    is_active: bool = True
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class ClientUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    identification_type: Optional[str] = None
+    identification_number: Optional[str] = None
+    credit_limit: Optional[float] = None
+    credit_limit_usd: Optional[float] = None
+    is_active: Optional[bool] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class ClientResponse(BaseModel):
+    id: str
+    business_id: Optional[str] = None
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    identification_type: str = "CI"
+    identification_number: str
+    credit_limit: float = 0.0
+    credit_limit_usd: float = 0.0
+    current_debt: float = 0.0
+    is_active: bool = True
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class ClientReceivablePaymentCreate(BaseModel):
+    amount_usd: float = Field(..., gt=0, description="Monto en USD del abono/pago")
+    exchange_rate: Optional[float] = Field(default=1.0, gt=0)
+    payment_method: Optional[str] = Field(default="CASH_USD")
+    reference: Optional[str] = None
+    notes: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class ClientLedgerResponse(BaseModel):
+    id: str
+    client_id: str
+    sale_id: Optional[str] = None
+    tx_type: str
+    amount_usd: float
+    exchange_rate: float = 1.0
+    reference: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+
 
 
 

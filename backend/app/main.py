@@ -192,6 +192,72 @@ async def on_startup():
                 )
                 WHERE u.business_id IS NOT NULL AND u.branch_id IS NULL;
             """))
+
+            # 5. Módulo de Clientes y Cuentas por Cobrar (CxC Ledger)
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS clients (
+                    id VARCHAR(36) PRIMARY KEY,
+                    business_id VARCHAR(36) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+                    name VARCHAR(255) NOT NULL,
+                    email VARCHAR(255),
+                    phone VARCHAR(50),
+                    address TEXT,
+                    identification_type VARCHAR(20) NOT NULL DEFAULT 'CI',
+                    identification_number VARCHAR(50) NOT NULL,
+                    credit_limit_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    current_debt NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    is_synced BOOLEAN NOT NULL DEFAULT FALSE,
+                    deleted_at TIMESTAMP WITHOUT TIME ZONE NULL,
+                    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+                    updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+                );
+            """))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_clients_business_id ON clients(business_id);"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_clients_identification ON clients(identification_number);"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name);"))
+
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS client_receivables_ledger (
+                    id VARCHAR(36) PRIMARY KEY,
+                    client_id VARCHAR(36) NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                    sale_id VARCHAR(36) NULL,
+                    tx_type VARCHAR(20) NOT NULL DEFAULT 'CHARGE',
+                    amount_usd NUMERIC(12, 2) NOT NULL,
+                    exchange_rate NUMERIC(12, 4) NOT NULL DEFAULT 1.0000,
+                    reference VARCHAR(100) NULL,
+                    notes TEXT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+                );
+            """))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_cxc_ledger_client_id ON client_receivables_ledger(client_id);"))
+
+            try:
+                await conn.execute(text("""
+                    CREATE OR REPLACE VIEW view_client_balances AS
+                    SELECT 
+                        c.id AS client_id,
+                        c.business_id,
+                        c.name,
+                        c.identification_type,
+                        c.identification_number,
+                        c.credit_limit_usd,
+                        COALESCE(SUM(
+                            CASE 
+                                WHEN l.tx_type = 'CHARGE' THEN l.amount_usd
+                                WHEN l.tx_type IN ('PAYMENT', 'DISCOUNT') THEN -l.amount_usd
+                                ELSE 0 
+                            END
+                        ), 0.00) AS current_debt_usd
+                    FROM clients c
+                    LEFT JOIN client_receivables_ledger l ON c.id = l.client_id
+                    WHERE c.deleted_at IS NULL
+                    GROUP BY c.id, c.business_id, c.name, c.identification_type, c.identification_number, c.credit_limit_usd;
+                """))
+            except Exception:
+                pass
     except Exception:
         pass
 
