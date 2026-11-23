@@ -5176,6 +5176,49 @@ async def pos_sync_bootstrap(
             }
         })
 
+    # 8. Clientes del negocio para ventas y cuentas por cobrar
+    pos_clients = []
+    try:
+        c_res = await db.execute(
+            select(ClientModel)
+            .where(ClientModel.business_id == resolved_biz_id, ClientModel.deleted_at == None, ClientModel.is_active == True)
+        )
+        for c in c_res.scalars().all():
+            pos_clients.append({
+                "id": c.id,
+                "name": c.name,
+                "email": c.email,
+                "phone": c.phone,
+                "address": c.address,
+                "identification_type": c.identification_type,
+                "identification_number": c.identification_number,
+                "credit_limit": float(c.credit_limit_usd or 0.0),
+                "credit_limit_usd": float(c.credit_limit_usd or 0.0),
+                "current_debt": float(c.current_debt or 0.0),
+                "is_active": c.is_active
+            })
+    except Exception:
+        pass
+
+    if not pos_clients and clients_memory_db:
+        pos_clients = [
+            {
+                "id": c["id"],
+                "name": c["name"],
+                "email": c.get("email"),
+                "phone": c.get("phone"),
+                "address": c.get("address"),
+                "identification_type": c.get("identification_type", "CI"),
+                "identification_number": c["identification_number"],
+                "credit_limit": float(c.get("credit_limit_usd", c.get("credit_limit", 0.0))),
+                "credit_limit_usd": float(c.get("credit_limit_usd", c.get("credit_limit", 0.0))),
+                "current_debt": float(c.get("current_debt", 0.0)),
+                "is_active": c.get("is_active", True)
+            }
+            for c in clients_memory_db
+            if c.get("business_id") == resolved_biz_id and not c.get("deleted_at") and c.get("is_active", True)
+        ]
+
     return {
         "status": "BOOTSTRAP_SUCCESS",
         "server_timestamp": datetime.utcnow().isoformat(),
@@ -5211,7 +5254,8 @@ async def pos_sync_bootstrap(
         "payment_methods": active_payment_methods,
         "categories": categories_db,
         "products": pos_products,
-        "operators": operators
+        "operators": operators,
+        "clients": pos_clients
     }
 
 
@@ -5259,6 +5303,34 @@ async def pos_push_sync(
                 if prod.get("id") == p_id or prod.get("product_id") == p_id:
                     prod["current_stock"] = max(0.0, float(prod.get("current_stock", 0.0)) - p_qty)
                     break
+
+        # Sincronizar cuentas por cobrar si la venta fue a crédito para un cliente
+        client_id = s.get("client_id")
+        is_credit = s.get("is_credit", False) or str(s.get("payment_method", "")).upper() in ("CREDIT", "CREDITO", "CREDIT_SALE")
+        credit_amount = float(s.get("credit_amount_usd") or (sale_total if is_credit else 0.0))
+        if client_id and credit_amount > 0:
+            try:
+                res_c = await db.execute(select(ClientModel).where(ClientModel.id == client_id, ClientModel.deleted_at == None))
+                target_client = res_c.scalar_one_or_none()
+                if target_client:
+                    new_charge = ClientReceivablesLedgerModel(
+                        id=f"cxc-{uuid.uuid4().hex[:10]}",
+                        client_id=client_id,
+                        sale_id=sale_uuid,
+                        tx_type="CHARGE",
+                        amount_usd=credit_amount,
+                        exchange_rate=float(s.get("exchange_rate") or 1.0),
+                        reference=f"Venta a Crédito #{s.get('invoice_number', sale_uuid[:8])}",
+                        notes=f"Terminal POS: {cr_id or 'POS-01'}",
+                        version=1,
+                        created_at=datetime.utcnow()
+                    )
+                    db.add(new_charge)
+                    target_client.current_debt = float(target_client.current_debt or 0.0) + credit_amount
+                    target_client.updated_at = datetime.utcnow()
+                    await db.commit()
+            except Exception:
+                pass
 
     # Actualizar caja registradora (ventas del día y pulso en línea)
     if cr_id:
