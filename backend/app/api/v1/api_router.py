@@ -72,7 +72,8 @@ from app.models.entities import (
     Supplier as SupplierModel,
     Purchase as PurchaseModel,
     PurchaseItem as PurchaseItemModel,
-    SupplierPayablesLedger as SupplierPayablesLedgerModel
+    SupplierPayablesLedger as SupplierPayablesLedgerModel,
+    InventoryShrinkage as InventoryShrinkageModel
 )
 from app.core.security import create_access_token, decode_access_token, verify_google_id_token, get_password_hash, verify_password
 
@@ -3164,156 +3165,617 @@ categories_db: List[dict] = []
 shrinkage_db: List[dict] = []
 
 @api_router.get("/inventory/categories")
-async def list_categories():
+async def list_categories(
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
-    return categories_db
+    biz_id = "biz-25735853bd36"
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+
+    try:
+        res = await db.execute(
+            select(CategoryModel)
+            .where(
+                CategoryModel.business_id == biz_id,
+                CategoryModel.deleted_at.is_(None)
+            )
+            .order_by(CategoryModel.name.asc())
+        )
+        db_cats = res.scalars().all()
+
+        if not db_cats:
+            default_names = ["Víveres", "Bebidas", "Lácteos", "Limpieza", "Charcutería", "Snacks", "General"]
+            seeded = []
+            for dname in default_names:
+                c = CategoryModel(
+                    id=f"cat-{uuid.uuid4().hex[:10]}",
+                    business_id=biz_id,
+                    name=dname,
+                    parent_id=None,
+                    slug=dname.lower(),
+                    is_active=True,
+                    version=1
+                )
+                db.add(c)
+                seeded.append(c)
+            await db.commit()
+            db_cats = seeded
+
+        cat_map = {c.id: c for c in db_cats}
+        result = []
+        for c in db_cats:
+            full_path = c.name
+            if c.parent_id and c.parent_id in cat_map:
+                full_path = f"{cat_map[c.parent_id].name} > {c.name}"
+            result.append({
+                "id": c.id,
+                "name": c.name,
+                "parent_id": c.parent_id,
+                "full_path": full_path,
+                "slug": c.slug,
+                "is_active": c.is_active
+            })
+        return result
+    except Exception as e:
+        logger.error(f"[INVENTORY] Error listing categories: {e}")
+        return categories_db
 
 @api_router.post("/inventory/categories", status_code=status.HTTP_201_CREATED)
-async def create_category(payload: CategoryCreate):
+async def create_category(
+    payload: CategoryCreate,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    biz_id = "biz-25735853bd36"
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+
     full_path = payload.name
     if payload.parent_id:
-        parent = next((c for c in categories_db if c["id"] == payload.parent_id), None)
+        p_res = await db.execute(select(CategoryModel).where(CategoryModel.id == payload.parent_id))
+        parent = p_res.scalar_one_or_none()
         if parent:
-            full_path = f"{parent['full_path']} > {payload.name}"
-    new_cat = {
-        "id": f"cat-{int(datetime.utcnow().timestamp())}",
-        "name": payload.name,
-        "parent_id": payload.parent_id,
+            full_path = f"{parent.name} > {payload.name}"
+
+    new_cat = CategoryModel(
+        id=f"cat-{uuid.uuid4().hex[:10]}",
+        business_id=biz_id,
+        name=payload.name,
+        parent_id=payload.parent_id,
+        slug=payload.slug or payload.name.lower().replace(" ", "-"),
+        is_active=payload.is_active,
+        version=1
+    )
+    db.add(new_cat)
+    await db.commit()
+    await db.refresh(new_cat)
+
+    cat_dict = {
+        "id": new_cat.id,
+        "name": new_cat.name,
+        "parent_id": new_cat.parent_id,
         "full_path": full_path,
-        "is_active": payload.is_active
+        "slug": new_cat.slug,
+        "is_active": new_cat.is_active
     }
-    categories_db.append(new_cat)
-    return new_cat
+    categories_db.append(cat_dict)
+    return cat_dict
 
 @api_router.get("/inventory/shrinkage")
-async def list_shrinkage():
+async def list_shrinkage(
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
-    return shrinkage_db
+    biz_id = "biz-25735853bd36"
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+
+    try:
+        res = await db.execute(
+            select(InventoryShrinkageModel)
+            .where(InventoryShrinkageModel.business_id == biz_id)
+            .order_by(InventoryShrinkageModel.created_at.desc())
+        )
+        records = res.scalars().all()
+        return [
+            {
+                "id": r.id,
+                "product_id": r.product_id,
+                "product_name": r.product_name or "Producto",
+                "branch_id": r.branch_id or "branch-1",
+                "quantity": float(r.quantity),
+                "cost_loss_usd": float(r.cost_loss_usd or 0.0),
+                "reason": r.reason,
+                "justification": r.justification or r.notes or "",
+                "date": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+            }
+            for r in records
+        ]
+    except Exception as e:
+        logger.error(f"[INVENTORY] Error listing shrinkage: {e}")
+        return shrinkage_db
+
+@api_router.post("/inventory/shrinkage")
+async def register_shrinkage(
+    payload: ShrinkageCreate,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    verify_system_operational()
+    biz_id = "biz-25735853bd36"
+    usr_id = None
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+        if tok and tok.get("sub"):
+            usr_id = tok.get("sub")
+
+    p_res = await db.execute(
+        select(ProductModel).where(
+            ProductModel.id == payload.product_id,
+            ProductModel.business_id == biz_id
+        )
+    )
+    product = p_res.scalar_one_or_none()
+    if not product:
+        p_res2 = await db.execute(select(ProductModel).where(ProductModel.sku == payload.product_id))
+        product = p_res2.scalar_one_or_none()
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    prod_name = payload.product_name or product.name
+    unit_cost = float(product.cost_price or 0.0)
+    cost_loss = payload.quantity * unit_cost
+
+    new_stock = max(0.0, float(product.current_stock or 0.0) - payload.quantity)
+    product.current_stock = new_stock
+    product.cached_stock_quantity = new_stock
+    product.version = (product.version or 1) + 1
+    product.updated_at = datetime.utcnow()
+
+    shk_id = f"shk-{uuid.uuid4().hex[:10]}"
+    shk_record = InventoryShrinkageModel(
+        id=shk_id,
+        business_id=biz_id,
+        branch_id=payload.branch_id or "branch-1",
+        user_id=usr_id,
+        product_id=product.id,
+        product_name=prod_name,
+        quantity=payload.quantity,
+        cost_loss_usd=cost_loss,
+        reason=payload.reason,
+        justification=payload.justification or payload.notes or "",
+        notes=payload.notes or payload.justification or "",
+        created_at=datetime.utcnow()
+    )
+    db.add(shk_record)
+
+    kdx_tx = InventoryTransactionModel(
+        id=f"kdx-{uuid.uuid4().hex[:10]}",
+        business_id=biz_id,
+        branch_id=payload.branch_id or "branch-1",
+        user_id=usr_id,
+        product_id=product.id,
+        tx_type="OUT",
+        reason="SHRINKAGE",
+        quantity=payload.quantity,
+        unit_cost_usd=unit_cost,
+        total_cost_usd=cost_loss,
+        reference_id=shk_id,
+        created_at=datetime.utcnow()
+    )
+    db.add(kdx_tx)
+    await db.commit()
+
+    for p in inventory_db:
+        if p["id"] == product.id or p.get("product_id") == product.id:
+            p["current_stock"] = new_stock
+            break
+
+    res_dict = {
+        "id": shk_id,
+        "product_id": product.id,
+        "product_name": prod_name,
+        "branch_id": payload.branch_id or "branch-1",
+        "quantity": payload.quantity,
+        "cost_loss_usd": cost_loss,
+        "reason": payload.reason,
+        "justification": payload.justification or "",
+        "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    }
+    shrinkage_db.append(res_dict)
+    return res_dict
 
 @api_router.post("/inventory/adjust-stock")
-async def adjust_stock(payload: StockAdjustmentDTO):
+async def adjust_stock(
+    payload: StockAdjustmentDTO,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    biz_id = "biz-25735853bd36"
+    usr_id = None
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+        if tok and tok.get("sub"):
+            usr_id = tok.get("sub")
+
+    p_res = await db.execute(
+        select(ProductModel).where(
+            ProductModel.id == payload.product_id,
+            ProductModel.business_id == biz_id
+        )
+    )
+    product = p_res.scalar_one_or_none()
+    if not product:
+        p_res2 = await db.execute(select(ProductModel).where(ProductModel.sku == payload.product_id))
+        product = p_res2.scalar_one_or_none()
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    old_stock = float(product.current_stock or 0.0)
+    if payload.new_quantity is not None:
+        new_stock = float(payload.new_quantity)
+        delta = new_stock - old_stock
+    elif payload.new_stock is not None:
+        new_stock = float(payload.new_stock)
+        delta = new_stock - old_stock
+    elif payload.quantity_change is not None:
+        delta = float(payload.quantity_change)
+        new_stock = max(0.0, old_stock + delta)
+    else:
+        raise HTTPException(status_code=400, detail="Debe suministrar new_quantity o quantity_change")
+
+    product.current_stock = new_stock
+    product.cached_stock_quantity = new_stock
+    product.version = (product.version or 1) + 1
+    product.updated_at = datetime.utcnow()
+
+    if delta != 0:
+        tx_type = "IN" if delta > 0 else "OUT"
+        reason = payload.reason or "MANUAL_ADJUSTMENT"
+        unit_cost = float(product.cost_price or 0.0)
+        db.add(InventoryTransactionModel(
+            id=f"kdx-{uuid.uuid4().hex[:10]}",
+            business_id=biz_id,
+            branch_id=payload.branch_id or "branch-1",
+            user_id=usr_id,
+            product_id=product.id,
+            tx_type=tx_type,
+            reason=reason,
+            quantity=abs(delta),
+            unit_cost_usd=unit_cost,
+            total_cost_usd=abs(delta) * unit_cost,
+            reference_id=payload.justification or payload.notes or "MANUAL_ADJUSTMENT",
+            created_at=datetime.utcnow()
+        ))
+
+    await db.commit()
+
     for p in inventory_db:
-        if p["id"] == payload.product_id or p.get("product_id") == payload.product_id:
-            old_qty = p["current_stock"]
-            p["current_stock"] = payload.new_quantity
-            return {
-                "status": "SUCCESS",
-                "product_id": p["id"],
-                "old_quantity": old_qty,
-                "new_quantity": payload.new_quantity,
-                "justification": payload.justification
-            }
-    raise HTTPException(status_code=404, detail="Producto no encontrado")
+        if p["id"] == product.id or p.get("product_id") == product.id:
+            p["current_stock"] = new_stock
+            break
+
+    return {
+        "status": "SUCCESS",
+        "product_id": product.id,
+        "old_quantity": old_stock,
+        "new_quantity": new_stock,
+        "current_stock": new_stock,
+        "delta": delta,
+        "justification": payload.justification or payload.notes or ""
+    }
 
 @api_router.get("/inventory/products/{combo_id}/components")
-async def get_combo_components(combo_id: str):
+async def get_combo_components(
+    combo_id: str,
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
-    prod = next((p for p in inventory_db if p["id"] == combo_id or p.get("product_id") == combo_id), None)
-    if not prod:
-        raise HTTPException(status_code=404, detail="Combo no encontrado")
-    return prod.get("combo_items", [])
+    try:
+        res = await db.execute(
+            select(ProductCompositionModel, ProductModel.name, ProductModel.sku)
+            .join(ProductModel, ProductCompositionModel.child_id == ProductModel.id, isouter=True)
+            .where(ProductCompositionModel.parent_id == combo_id)
+        )
+        return [
+            {
+                "product_id": comp.child_id,
+                "product_name": name or "Componente",
+                "sku": sku or "",
+                "quantity": float(comp.quantity_required)
+            }
+            for comp, name, sku in res.all()
+        ]
+    except Exception as e:
+        logger.error(f"[INVENTORY] Error getting combo components: {e}")
+        prod = next((p for p in inventory_db if p["id"] == combo_id or p.get("product_id") == combo_id), None)
+        if not prod:
+            raise HTTPException(status_code=404, detail="Combo no encontrado")
+        return prod.get("combo_items", [])
 
 @api_router.put("/inventory/products/{combo_id}/components")
-async def update_combo_components(combo_id: str, components: List[dict]):
+async def update_combo_components(
+    combo_id: str,
+    components: List[dict],
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    try:
+        await db.execute(delete(ProductCompositionModel).where(ProductCompositionModel.parent_id == combo_id))
+        for comp in components:
+            db.add(ProductCompositionModel(
+                id=f"comp-{uuid.uuid4().hex[:10]}",
+                parent_id=combo_id,
+                child_id=comp.get("product_id"),
+                quantity_required=comp.get("quantity", 1.0)
+            ))
+        await db.commit()
+    except Exception as e:
+        logger.error(f"[INVENTORY] Error updating combo components in DB: {e}")
+
     for p in inventory_db:
         if p["id"] == combo_id or p.get("product_id") == combo_id:
             p["combo_items"] = components
             return {"status": "SUCCESS", "combo_items": components}
-    raise HTTPException(status_code=404, detail="Combo no encontrado")
+    return {"status": "SUCCESS", "combo_items": components}
 
 @api_router.get("/inventory")
 @api_router.get("/inventory/products")
 async def list_products(
     branch_id: Optional[str] = None,
     search: Optional[str] = None,
+    category: Optional[str] = None,
+    product_type: Optional[str] = None,
+    stock_status: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     verify_system_operational()
+    biz_id = "biz-25735853bd36"
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+
     try:
-        stmt = select(ProductModel).where(ProductModel.is_active == True)
-        if search:
-            s_term = f"%{search.lower()}%"
+        stmt = select(ProductModel).where(
+            ProductModel.business_id == biz_id,
+            ProductModel.deleted_at.is_(None),
+            ProductModel.is_active == True
+        )
+        if search and search.strip():
+            s_term = f"%{search.strip().lower()}%"
             stmt = stmt.where(or_(
                 func.lower(ProductModel.name).like(s_term),
                 func.lower(ProductModel.sku).like(s_term),
-                func.lower(ProductModel.barcode).like(s_term)
+                func.lower(ProductModel.barcode).like(s_term),
+                func.lower(ProductModel.category).like(s_term)
             ))
+        if category and category.strip() and category.upper() != "ALL":
+            stmt = stmt.where(ProductModel.category == category.strip())
+        if product_type and product_type.strip():
+            stmt = stmt.where(ProductModel.product_type == product_type.strip())
+        if stock_status and stock_status.upper() == "OPTIMAL":
+            stmt = stmt.where(ProductModel.current_stock > ProductModel.min_stock_alert)
+        elif stock_status and stock_status.upper() == "LOW":
+            stmt = stmt.where(
+                ProductModel.current_stock > 0,
+                ProductModel.current_stock <= ProductModel.min_stock_alert
+            )
+        elif stock_status and stock_status.upper() == "OUT":
+            stmt = stmt.where(ProductModel.current_stock <= 0)
+
+        stmt = stmt.order_by(ProductModel.created_at.desc())
         res = await db.execute(stmt)
         db_prods = res.scalars().all()
-        for p in db_prods:
-            existing = next((ip for ip in inventory_db if ip.get("id") == p.id or ip.get("sku") == p.sku), None)
-            if existing:
-                existing["name"] = p.name
-                existing["sale_price"] = float(p.sale_price or 0.0)
-                existing["cost_price"] = float(p.cost_price or 0.0)
-            else:
-                inventory_db.append({
-                    "id": p.id,
-                    "product_id": p.id,
-                    "sku": p.sku,
-                    "barcode": p.barcode,
-                    "name": p.name,
-                    "description": p.description or "",
-                    "category": p.category or "General",
-                    "cost_price": float(p.cost_price or 0.0),
-                    "sale_price": float(p.sale_price or 0.0),
-                    "wholesale_price": float(p.wholesale_price or 0.0),
-                    "package_quantity": p.package_quantity or 1,
-                    "product_type": p.product_type or "physical",
-                    "tax_type": p.tax_type or "vat",
-                    "unit_measure": p.unit_measure or "UND",
-                    "min_stock_alert": float(p.min_stock_alert or 5.0),
-                    "current_stock": 0.0,
-                    "image_url": p.image_url,
-                    "is_active": p.is_active,
-                    "created_at": p.created_at.isoformat() if p.created_at else None
-                })
-    except Exception as e:
-        logger.debug(f"[INVENTORY] Error loading products from DB: {e}")
 
-    items = inventory_db
-    if branch_id:
-        items = [p for p in items if p.get("branch_id") == branch_id or not p.get("branch_id")]
-    if search:
-        s_low = search.lower()
-        items = [p for p in items if s_low in p.get("name", "").lower() or s_low in p.get("sku", "").lower() or s_low in str(p.get("barcode", "")).lower()]
-    return items
+        combo_parent_ids = [p.id for p in db_prods if p.product_type == "virtual"]
+        combo_map: Dict[str, List[dict]] = {}
+        if combo_parent_ids:
+            c_res = await db.execute(
+                select(ProductCompositionModel, ProductModel.name)
+                .join(ProductModel, ProductCompositionModel.child_id == ProductModel.id, isouter=True)
+                .where(ProductCompositionModel.parent_id.in_(combo_parent_ids))
+            )
+            for comp, child_name in c_res.all():
+                combo_map.setdefault(comp.parent_id, []).append({
+                    "product_id": comp.child_id,
+                    "product_name": child_name or "Componente",
+                    "quantity": float(comp.quantity_required or 1.0)
+                })
+
+        output = []
+        for p in db_prods:
+            item = {
+                "id": p.id,
+                "product_id": p.id,
+                "sku": p.sku,
+                "barcode": p.barcode or "",
+                "name": p.name,
+                "description": p.description or "",
+                "category": p.category or "General",
+                "category_id": p.category_id,
+                "cost_price": float(p.cost_price or 0.0),
+                "sale_price": float(p.sale_price or 0.0),
+                "wholesale_price": float(p.wholesale_price or 0.0),
+                "package_quantity": p.package_quantity or 1,
+                "product_type": p.product_type or "physical",
+                "tax_type": p.tax_type or "vat",
+                "unit_measure": p.unit_measure or "UND",
+                "current_stock": float(p.current_stock or 0.0),
+                "min_stock_alert": float(p.min_stock_alert or 5.0),
+                "image_url": p.image_url,
+                "is_active": p.is_active,
+                "combo_items": combo_map.get(p.id, []),
+                "branch_id": branch_id or "branch-1",
+                "branch_name": "Sucursal Principal" if (branch_id or "branch-1") == "branch-1" else "Sucursal Norte",
+                "created_at": p.created_at.isoformat() if p.created_at else None
+            }
+            output.append(item)
+
+        for o in output:
+            idx = next((i for i, x in enumerate(inventory_db) if x.get("id") == o["id"]), None)
+            if idx is not None:
+                inventory_db[idx] = o
+            else:
+                inventory_db.append(o)
+
+        return output
+    except Exception as e:
+        logger.error(f"[INVENTORY] Error loading products from DB: {e}")
+        items = inventory_db
+        if search:
+            s_low = search.lower()
+            items = [p for p in items if s_low in p.get("name", "").lower() or s_low in p.get("sku", "").lower() or s_low in str(p.get("barcode", "")).lower()]
+        return items
 
 @api_router.get("/inventory/{branch_id}")
-async def get_branch_inventory(branch_id: str):
+async def get_branch_inventory(branch_id: str, db: AsyncSession = Depends(get_db)):
     verify_system_operational()
-    return [p for p in inventory_db if p.get("branch_id") == branch_id or not p.get("branch_id")]
+    return await list_products(branch_id=branch_id, db=db)
 
 @api_router.post("/inventory/products", status_code=status.HTTP_201_CREATED)
-async def create_product(payload: ProductCreate):
+async def create_product(
+    payload: ProductCreate,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
-    new_p = {
-        "id": f"inv-{int(datetime.utcnow().timestamp() * 1000)}",
-        "product_id": f"p-{int(datetime.utcnow().timestamp())}",
-        "barcode": payload.barcode or f"759{int(datetime.utcnow().timestamp())}",
-        "sku": payload.sku,
-        "name": payload.name,
-        "description": payload.description or "",
-        "category": payload.category or "General",
-        "cost_price": payload.cost_price,
-        "sale_price": payload.sale_price,
-        "wholesale_price": payload.wholesale_price or 0.0,
-        "package_quantity": payload.package_quantity or 1,
-        "product_type": payload.product_type or "physical",
-        "tax_type": payload.tax_type or "vat",
-        "unit_measure": payload.unit_measure or "UND",
-        "current_stock": payload.current_stock or 0.0,
-        "min_stock_alert": payload.min_stock_alert or 5.0,
-        "image_url": payload.image_url or "",
+    biz_id = "biz-25735853bd36"
+    usr_id = None
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+        if tok and tok.get("sub"):
+            usr_id = tok.get("sub")
+
+    chk = await db.execute(
+        select(ProductModel).where(
+            ProductModel.business_id == biz_id,
+            ProductModel.sku == payload.sku,
+            ProductModel.deleted_at.is_(None)
+        )
+    )
+    if chk.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Ya existe un producto registrado con el SKU '{payload.sku}'"
+        )
+
+    prod_id = f"prod-{uuid.uuid4().hex[:8]}"
+    barcode = payload.barcode or f"759{int(datetime.utcnow().timestamp())}"
+    current_stock = float(payload.current_stock or 0.0)
+
+    new_prod = ProductModel(
+        id=prod_id,
+        business_id=biz_id,
+        category_id=getattr(payload, "category_id", None),
+        category=payload.category or "General",
+        barcode=barcode,
+        sku=payload.sku,
+        name=payload.name,
+        description=payload.description or "",
+        cost_price=payload.cost_price,
+        sale_price=payload.sale_price,
+        wholesale_price=payload.wholesale_price or 0.0,
+        package_quantity=payload.package_quantity or 1,
+        product_type=payload.product_type or "physical",
+        tax_type=payload.tax_type or "vat",
+        unit_measure=payload.unit_measure or "UND",
+        min_stock_alert=payload.min_stock_alert or 5.0,
+        image_url=payload.image_url or None,
+        is_active=True,
+        current_stock=current_stock,
+        cached_stock_quantity=current_stock,
+        version=1,
+        is_synced=False,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+    db.add(new_prod)
+    await db.flush()
+
+    combo_list = []
+    if payload.combo_items and (payload.product_type == "virtual" or len(payload.combo_items) > 0):
+        for item in payload.combo_items:
+            comp_id = f"comp-{uuid.uuid4().hex[:10]}"
+            comp = ProductCompositionModel(
+                id=comp_id,
+                parent_id=new_prod.id,
+                child_id=item.product_id,
+                quantity_required=item.quantity
+            )
+            db.add(comp)
+            combo_list.append({
+                "product_id": item.product_id,
+                "product_name": item.product_name or "Componente",
+                "quantity": float(item.quantity)
+            })
+
+    if current_stock > 0 and (payload.product_type or "physical") == "physical":
+        db.add(InventoryTransactionModel(
+            id=f"kdx-{uuid.uuid4().hex[:10]}",
+            business_id=biz_id,
+            branch_id=payload.branch_id or "branch-1",
+            user_id=usr_id,
+            product_id=new_prod.id,
+            tx_type="IN",
+            reason="MANUAL_ADJUSTMENT",
+            quantity=current_stock,
+            unit_cost_usd=payload.cost_price,
+            total_cost_usd=payload.cost_price * current_stock,
+            reference_id="INITIAL_STOCK",
+            created_at=datetime.utcnow()
+        ))
+
+    await db.commit()
+    await db.refresh(new_prod)
+
+    res_item = {
+        "id": new_prod.id,
+        "product_id": new_prod.id,
+        "sku": new_prod.sku,
+        "barcode": new_prod.barcode,
+        "name": new_prod.name,
+        "description": new_prod.description or "",
+        "category": new_prod.category or "General",
+        "category_id": new_prod.category_id,
+        "cost_price": float(new_prod.cost_price or 0.0),
+        "sale_price": float(new_prod.sale_price or 0.0),
+        "wholesale_price": float(new_prod.wholesale_price or 0.0),
+        "package_quantity": new_prod.package_quantity or 1,
+        "product_type": new_prod.product_type or "physical",
+        "tax_type": new_prod.tax_type or "vat",
+        "unit_measure": new_prod.unit_measure or "UND",
+        "current_stock": float(new_prod.current_stock or 0.0),
+        "min_stock_alert": float(new_prod.min_stock_alert or 5.0),
+        "image_url": new_prod.image_url,
+        "is_active": new_prod.is_active,
+        "combo_items": combo_list,
         "branch_id": payload.branch_id or "branch-1",
         "branch_name": "Sucursal Principal" if payload.branch_id == "branch-1" else "Sucursal Norte",
-        "combo_items": [c.model_dump() for c in (payload.combo_items or [])]
+        "created_at": new_prod.created_at.isoformat() if new_prod.created_at else None
     }
-    inventory_db.insert(0, new_p)
-    return new_p
+    inventory_db.insert(0, res_item)
+    return res_item
 
 @api_router.post("/inventory/products/image")
 async def upload_product_image_endpoint(
@@ -3325,54 +3787,196 @@ async def upload_product_image_endpoint(
     return await save_and_process_product_image(file, old_image_url)
 
 @api_router.put("/inventory/products/{product_id}")
-async def update_product(product_id: str, payload: ProductUpdate):
+async def update_product(
+    product_id: str,
+    payload: ProductUpdate,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    biz_id = "biz-25735853bd36"
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+
+    res = await db.execute(
+        select(ProductModel).where(
+            ProductModel.id == product_id,
+            ProductModel.business_id == biz_id,
+            ProductModel.deleted_at.is_(None)
+        )
+    )
+    product = res.scalar_one_or_none()
+    if not product:
+        res2 = await db.execute(select(ProductModel).where(ProductModel.sku == product_id, ProductModel.business_id == biz_id))
+        product = res2.scalar_one_or_none()
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    if payload.name is not None: product.name = payload.name
+    if payload.sku is not None: product.sku = payload.sku
+    if payload.barcode is not None: product.barcode = payload.barcode
+    if payload.description is not None: product.description = payload.description
+    if payload.category is not None: product.category = payload.category
+    if getattr(payload, "category_id", None) is not None: product.category_id = payload.category_id
+    if payload.cost_price is not None: product.cost_price = payload.cost_price
+    if payload.sale_price is not None: product.sale_price = payload.sale_price
+    if payload.wholesale_price is not None: product.wholesale_price = payload.wholesale_price
+    if payload.package_quantity is not None: product.package_quantity = payload.package_quantity
+    if payload.product_type is not None: product.product_type = payload.product_type
+    if payload.tax_type is not None: product.tax_type = payload.tax_type
+    if payload.unit_measure is not None: product.unit_measure = payload.unit_measure
+    if payload.min_stock_alert is not None: product.min_stock_alert = payload.min_stock_alert
+
+    if payload.image_url is not None and payload.image_url != product.image_url:
+        if product.image_url:
+            delete_product_images(product.image_url)
+        product.image_url = payload.image_url
+
+    if payload.combo_items is not None:
+        await db.execute(delete(ProductCompositionModel).where(ProductCompositionModel.parent_id == product.id))
+        for comp in payload.combo_items:
+            db.add(ProductCompositionModel(
+                id=f"comp-{uuid.uuid4().hex[:10]}",
+                parent_id=product.id,
+                child_id=comp.product_id,
+                quantity_required=comp.quantity
+            ))
+
+    product.version = (product.version or 1) + 1
+    product.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(product)
+
+    c_res = await db.execute(
+        select(ProductCompositionModel, ProductModel.name)
+        .join(ProductModel, ProductCompositionModel.child_id == ProductModel.id, isouter=True)
+        .where(ProductCompositionModel.parent_id == product.id)
+    )
+    combo_list = [
+        {"product_id": comp.child_id, "product_name": child_name or "Componente", "quantity": float(comp.quantity_required)}
+        for comp, child_name in c_res.all()
+    ]
+
+    res_dict = {
+        "id": product.id,
+        "product_id": product.id,
+        "sku": product.sku,
+        "barcode": product.barcode,
+        "name": product.name,
+        "description": product.description or "",
+        "category": product.category or "General",
+        "category_id": product.category_id,
+        "cost_price": float(product.cost_price or 0.0),
+        "sale_price": float(product.sale_price or 0.0),
+        "wholesale_price": float(product.wholesale_price or 0.0),
+        "package_quantity": product.package_quantity or 1,
+        "product_type": product.product_type or "physical",
+        "tax_type": product.tax_type or "vat",
+        "unit_measure": product.unit_measure or "UND",
+        "current_stock": float(product.current_stock or 0.0),
+        "min_stock_alert": float(product.min_stock_alert or 5.0),
+        "image_url": product.image_url,
+        "is_active": product.is_active,
+        "combo_items": combo_list,
+        "updated_at": product.updated_at.isoformat() if product.updated_at else None
+    }
+
     for i, p in enumerate(inventory_db):
-        if p["id"] == product_id or p.get("product_id") == product_id:
-            data = payload.model_dump(exclude_unset=True)
-            if "combo_items" in data and data["combo_items"] is not None:
-                data["combo_items"] = [c if isinstance(c, dict) else c.model_dump() for c in data["combo_items"]]
-            
-            # Limpieza en Supabase Storage si se reemplaza la imagen anterior
-            if "image_url" in data and data["image_url"] != p.get("image_url") and p.get("image_url"):
-                delete_product_images(p["image_url"])
-
-            inventory_db[i].update(data)
-            return inventory_db[i]
-    return {"message": "Producto no encontrado"}
-
-@api_router.delete("/inventory/products/{product_id}")
-async def delete_product(product_id: str):
-    verify_system_operational()
-    global inventory_db
-    for p in inventory_db:
-        if p["id"] == product_id or p.get("product_id") == product_id:
-            if p.get("image_url"):
-                delete_product_images(p["image_url"])
+        if p["id"] == product.id or p.get("product_id") == product.id:
+            inventory_db[i].update(res_dict)
             break
 
+    return res_dict
+
+@api_router.delete("/inventory/products/{product_id}")
+async def delete_product(
+    product_id: str,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    verify_system_operational()
+    biz_id = "biz-25735853bd36"
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+
+    res = await db.execute(
+        select(ProductModel).where(
+            ProductModel.id == product_id,
+            ProductModel.business_id == biz_id,
+            ProductModel.deleted_at.is_(None)
+        )
+    )
+    product = res.scalar_one_or_none()
+    if product:
+        if product.image_url:
+            delete_product_images(product.image_url)
+        product.deleted_at = datetime.utcnow()
+        product.is_active = False
+        product.version = (product.version or 1) + 1
+        await db.commit()
+
+    global inventory_db
     inventory_db = [p for p in inventory_db if p["id"] != product_id and p.get("product_id") != product_id]
     return {"message": "Producto eliminado exitosamente"}
 
-@api_router.post("/inventory/shrinkage")
-async def register_shrinkage(payload: ShrinkageCreate):
+@api_router.get("/inventory/transactions")
+@api_router.get("/inventory/kardex")
+async def list_kardex_transactions(
+    product_id: Optional[str] = None,
+    tx_type: Optional[str] = None,
+    reason: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
-    for p in inventory_db:
-        if p["id"] == payload.product_id or p.get("product_id") == payload.product_id:
-            p["current_stock"] = max(0.0, p["current_stock"] - payload.quantity)
-            break
-    record = {
-        "id": f"shk-{int(datetime.utcnow().timestamp())}",
-        "product_id": payload.product_id,
-        "product_name": payload.product_name or "Producto",
-        "branch_id": payload.branch_id or "branch-1",
-        "quantity": payload.quantity,
-        "reason": payload.reason,
-        "justification": payload.justification or "",
-        "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-    }
-    shrinkage_db.append(record)
-    return record
+    biz_id = "biz-25735853bd36"
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+
+    stmt = (
+        select(InventoryTransactionModel, ProductModel.name, ProductModel.sku)
+        .join(ProductModel, InventoryTransactionModel.product_id == ProductModel.id, isouter=True)
+        .where(InventoryTransactionModel.business_id == biz_id)
+    )
+    if product_id:
+        stmt = stmt.where(InventoryTransactionModel.product_id == product_id)
+    if tx_type:
+        stmt = stmt.where(InventoryTransactionModel.tx_type == tx_type.upper())
+    if reason:
+        stmt = stmt.where(InventoryTransactionModel.reason == reason.upper())
+
+    stmt = stmt.order_by(InventoryTransactionModel.created_at.desc()).limit(limit).offset(offset)
+    res = await db.execute(stmt)
+    rows = res.all()
+
+    return [
+        {
+            "id": tx.id,
+            "business_id": tx.business_id,
+            "branch_id": tx.branch_id,
+            "product_id": tx.product_id,
+            "product_name": p_name or "Producto",
+            "product_sku": p_sku or "",
+            "tx_type": tx.tx_type,
+            "reason": tx.reason,
+            "quantity": float(tx.quantity),
+            "unit_cost_usd": float(tx.unit_cost_usd or 0.0),
+            "total_cost_usd": float(tx.total_cost_usd or 0.0),
+            "reference_id": tx.reference_id,
+            "terminal_id": tx.terminal_id,
+            "created_at": tx.created_at.isoformat() if tx.created_at else None
+        }
+        for tx, p_name, p_sku in rows
+    ]
 
 @api_router.get("/inventory/transfers")
 async def list_transfers():

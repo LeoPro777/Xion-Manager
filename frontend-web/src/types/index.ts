@@ -213,6 +213,23 @@ export interface StockAdjustmentDTO {
   notes?: string;
 }
 
+export interface InventoryTransaction {
+  id: string;
+  business_id: string;
+  branch_id?: string;
+  product_id: string;
+  product_name?: string;
+  product_sku?: string;
+  tx_type: 'IN' | 'OUT';
+  reason: 'SALE' | 'PURCHASE' | 'SHRINKAGE' | 'REFUND' | 'MANUAL_ADJUSTMENT' | 'COMBO_PACK';
+  quantity: number;
+  unit_cost_usd: number;
+  total_cost_usd: number;
+  reference_id?: string;
+  terminal_id?: string;
+  created_at: string;
+}
+
 export interface SupplierPayableLedgerItem {
   id: string;
   supplier_id: string;

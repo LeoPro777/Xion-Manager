@@ -236,12 +236,19 @@ class ProductUpdate(BaseModel):
 
 class StockAdjustmentDTO(BaseModel):
     product_id: str
-    new_quantity: float = Field(..., ge=0)
-    justification: str
+    new_quantity: Optional[float] = None
+    new_stock: Optional[float] = None
+    quantity_change: Optional[float] = None
+    justification: Optional[str] = ""
+    reason: Optional[str] = "MANUAL_ADJUSTMENT"
+    notes: Optional[str] = None
+    branch_id: Optional[str] = None
 
 class CategoryCreate(BaseModel):
     name: str = Field(..., min_length=2)
     parent_id: Optional[str] = None
+    slug: Optional[str] = None
+    description: Optional[str] = None
     is_active: bool = True
 
 class CategoryResponse(BaseModel):
@@ -249,6 +256,8 @@ class CategoryResponse(BaseModel):
     name: str
     parent_id: Optional[str] = None
     full_path: Optional[str] = None
+    slug: Optional[str] = None
+    description: Optional[str] = None
     is_active: bool = True
 
 class ShrinkageCreate(BaseModel):
@@ -258,6 +267,23 @@ class ShrinkageCreate(BaseModel):
     quantity: float = Field(..., gt=0)
     reason: str = "Dañado/Vencido"
     justification: Optional[str] = ""
+    notes: Optional[str] = None
+
+class InventoryTransactionResponse(BaseModel):
+    id: str
+    business_id: str
+    product_id: str
+    product_name: Optional[str] = None
+    product_sku: Optional[str] = None
+    branch_id: Optional[str] = None
+    tx_type: str
+    reason: str
+    quantity: float
+    unit_cost_usd: float = 0.0
+    total_cost_usd: float = 0.0
+    reference_id: Optional[str] = None
+    terminal_id: Optional[str] = None
+    created_at: datetime
 
 class StockTransferCreate(BaseModel):
     origin_branch_id: str

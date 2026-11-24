@@ -33,7 +33,8 @@ import {
   StockAdjustmentDTO,
   SupplierPayableLedgerItem,
   Client,
-  ClientReceivableLedgerItem
+  ClientReceivableLedgerItem,
+  InventoryTransaction
 } from '../types';
 
 function authHeaders(extraHeaders: Record<string, string> = {}): Record<string, string> {
@@ -1511,6 +1512,19 @@ export const api = {
       // offline fallback
     }
     return [...mockShrinkages];
+  },
+
+  async getInventoryTransactions(productId?: string): Promise<InventoryTransaction[]> {
+    try {
+      const url = productId ? `/api/v1/inventory/transactions?product_id=${productId}` : '/api/v1/inventory/transactions';
+      const res = await fetch(url);
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // offline fallback
+    }
+    return [];
   },
 
   async getTransfers(): Promise<StockTransfer[]> {

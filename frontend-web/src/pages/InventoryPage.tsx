@@ -23,11 +23,12 @@ import {
   Upload,
   Download,
   Check,
-  RefreshCw
+  RefreshCw,
+  History
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { api, resolveImageUrl } from '../services/api';
-import { ProductInventory, Branch, ComboItem, CategoryItem, StockAdjustmentDTO } from '../types';
+import { ProductInventory, Branch, ComboItem, CategoryItem, StockAdjustmentDTO, InventoryTransaction } from '../types';
 
 export const InventoryPage: React.FC = () => {
   const [items, setItems] = useState<ProductInventory[]>([]);
@@ -81,6 +82,27 @@ export const InventoryPage: React.FC = () => {
   const [importError, setImportError] = useState<string>('');
   const [importSuccessMsg, setImportSuccessMsg] = useState<string>('');
   const [isImporting, setIsImporting] = useState<boolean>(false);
+
+  // Kardex Modal State
+  const [showKardexModal, setShowKardexModal] = useState(false);
+  const [kardexProduct, setKardexProduct] = useState<ProductInventory | null>(null);
+  const [kardexTransactions, setKardexTransactions] = useState<InventoryTransaction[]>([]);
+  const [loadingKardex, setLoadingKardex] = useState(false);
+  const [kardexFilterType, setKardexFilterType] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
+
+  const handleOpenKardex = async (product?: ProductInventory) => {
+    setKardexProduct(product || null);
+    setShowKardexModal(true);
+    setLoadingKardex(true);
+    try {
+      const txs = await api.getInventoryTransactions(product?.id || product?.product_id);
+      setKardexTransactions(txs);
+    } catch {
+      setKardexTransactions([]);
+    } finally {
+      setLoadingKardex(false);
+    }
+  };
 
   // Form State for Product Add / Edit
   const [formSku, setFormSku] = useState('');
@@ -593,6 +615,15 @@ export const InventoryPage: React.FC = () => {
           </button>
 
           <button 
+            onClick={() => handleOpenKardex()}
+            className="flex items-center gap-1 px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg sm:rounded-xl bg-slate-900 border border-slate-700/60 hover:bg-slate-800 text-slate-300 text-xs font-semibold transition-all"
+            title="Historial de Movimientos Kardex"
+          >
+            <History className="w-3.5 h-3.5 text-purple-400" />
+            <span>Kardex</span>
+          </button>
+
+          <button 
             onClick={() => handleOpenProductModal()}
             className="flex items-center gap-1 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg sm:rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold text-xs shadow-md shadow-cyan-500/20 transition-all"
           >
@@ -843,6 +874,13 @@ export const InventoryPage: React.FC = () => {
                           <TrendingDown className="w-3.5 h-3.5" />
                         </button>
                         <button
+                          onClick={() => handleOpenKardex(item)}
+                          className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-purple-500/50 text-slate-400 hover:text-purple-400 transition-all"
+                          title="Ver Movimientos Kardex"
+                        >
+                          <History className="w-3.5 h-3.5" />
+                        </button>
+                        <button
                           onClick={() => handleOpenProductModal(item)}
                           className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-cyan-500/50 text-slate-400 hover:text-cyan-400 transition-all"
                           title="Editar Producto"
@@ -930,6 +968,13 @@ export const InventoryPage: React.FC = () => {
                     >
                       <SlidersHorizontal className="w-3.5 h-3.5 text-blue-400" />
                       <span>Ajuste</span>
+                    </button>
+                    <button
+                      onClick={() => handleOpenKardex(item)}
+                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-purple-500/50 text-slate-300 hover:text-purple-400 transition-all"
+                      title="Ver Movimientos Kardex"
+                    >
+                      <History className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => handleOpenProductModal(item)}
@@ -1780,6 +1825,145 @@ export const InventoryPage: React.FC = () => {
                   )}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Kardex Movements Modal */}
+      {showKardexModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4">
+          <div className="glass-panel w-full max-w-4xl p-4 sm:p-6 rounded-2xl border border-slate-800 space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                  <History className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-100 text-sm sm:text-base">
+                    {kardexProduct ? `Kardex: ${kardexProduct.name}` : 'Libro Mayor de Inventario (Kardex)'}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    {kardexProduct ? `SKU: ${kardexProduct.sku} | Stock Actual: ${kardexProduct.current_stock}` : 'Historial inmutable de entradas y salidas'}
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowKardexModal(false)}
+                className="p-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Filter buttons */}
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-slate-400">Filtrar flujo:</span>
+              <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
+                <button
+                  onClick={() => setKardexFilterType('ALL')}
+                  className={`px-3 py-1 rounded-lg font-medium transition-all ${kardexFilterType === 'ALL' ? 'bg-purple-500/20 text-purple-400' : 'text-slate-400'}`}
+                >
+                  Todos
+                </button>
+                <button
+                  onClick={() => setKardexFilterType('IN')}
+                  className={`px-3 py-1 rounded-lg font-medium transition-all ${kardexFilterType === 'IN' ? 'bg-emerald-500/20 text-emerald-400' : 'text-slate-400'}`}
+                >
+                  Entradas (IN)
+                </button>
+                <button
+                  onClick={() => setKardexFilterType('OUT')}
+                  className={`px-3 py-1 rounded-lg font-medium transition-all ${kardexFilterType === 'OUT' ? 'bg-rose-500/20 text-rose-400' : 'text-slate-400'}`}
+                >
+                  Salidas (OUT)
+                </button>
+              </div>
+            </div>
+
+            {/* Table */}
+            <div className="flex-1 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/40">
+              {loadingKardex ? (
+                <div className="py-12 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
+                  <RefreshCw className="w-5 h-5 animate-spin text-purple-400" />
+                  <span className="text-xs">Cargando movimientos de Kardex...</span>
+                </div>
+              ) : kardexTransactions.length === 0 ? (
+                <div className="py-12 text-center text-slate-500 text-xs">
+                  No se registraron movimientos en el Kardex para esta consulta.
+                </div>
+              ) : (
+                <table className="w-full text-left text-xs text-slate-300">
+                  <thead className="bg-slate-900/90 sticky top-0 uppercase tracking-wider text-[10px] text-slate-400 border-b border-slate-800">
+                    <tr>
+                      <th className="p-3">Fecha</th>
+                      {!kardexProduct && <th className="p-3">Producto / SKU</th>}
+                      <th className="p-3">Tipo</th>
+                      <th className="p-3">Motivo</th>
+                      <th className="p-3 text-right">Cantidad</th>
+                      <th className="p-3 text-right">Costo Unit.</th>
+                      <th className="p-3 text-right">Costo Total</th>
+                      <th className="p-3">Referencia / Glosa</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 font-mono">
+                    {kardexTransactions
+                      .filter(tx => kardexFilterType === 'ALL' || tx.tx_type === kardexFilterType)
+                      .map(tx => {
+                        const isIn = tx.tx_type === 'IN';
+                        return (
+                          <tr key={tx.id} className="hover:bg-slate-900/40 transition-colors">
+                            <td className="p-3 text-slate-400 whitespace-nowrap text-[11px]">
+                              {tx.created_at ? tx.created_at.replace('T', ' ').substring(0, 16) : '-'}
+                            </td>
+                            {!kardexProduct && (
+                              <td className="p-3 font-sans">
+                                <div className="font-semibold text-slate-200">{tx.product_name || tx.product_id}</div>
+                                <div className="text-[10px] text-slate-400 font-mono">{tx.product_sku}</div>
+                              </td>
+                            )}
+                            <td className="p-3">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                isIn 
+                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                                  : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                              }`}>
+                                {tx.tx_type}
+                              </span>
+                            </td>
+                            <td className="p-3 text-slate-300 text-[11px] font-sans">
+                              {tx.reason === 'PURCHASE' ? 'COMPRA' :
+                               tx.reason === 'SALE' ? 'VENTA' :
+                               tx.reason === 'SHRINKAGE' ? 'MERMA' :
+                               tx.reason === 'MANUAL_ADJUSTMENT' ? 'AJUSTE MANUAL' :
+                               tx.reason === 'COMBO_PACK' ? 'COMBO / PACK' : tx.reason}
+                            </td>
+                            <td className={`p-3 text-right font-bold ${isIn ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {isIn ? `+${tx.quantity}` : `-${tx.quantity}`}
+                            </td>
+                            <td className="p-3 text-right text-slate-300">${Number(tx.unit_cost_usd || 0).toFixed(2)}</td>
+                            <td className="p-3 text-right text-slate-100 font-semibold">${Number(tx.total_cost_usd || 0).toFixed(2)}</td>
+                            <td className="p-3 text-slate-400 text-[11px] font-sans truncate max-w-[180px]" title={tx.reference_id || ''}>
+                              {tx.reference_id || '-'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-slate-800 flex justify-between items-center shrink-0">
+              <span className="text-[11px] text-slate-400">
+                Total movimientos auditados: <strong className="text-slate-200">{kardexTransactions.length}</strong>
+              </span>
+              <button
+                onClick={() => setShowKardexModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 text-xs font-semibold"
+              >
+                Cerrar
+              </button>
             </div>
           </div>
         </div>
