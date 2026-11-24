@@ -6221,6 +6221,42 @@ async def pos_push_sync(
 
     if clients:
         try:
+            await db.flush()
+        except Exception as fl_err:
+            logger.error(f"[PUSH] Error flush clientes: {fl_err}")
+
+    # 1.1 Ingesta de Abonos / Pagos de Deuda de Clientes realizados en caja (CxC)
+    client_payments = payload.get("client_payments", [])
+    for cp in client_payments:
+        cpid = cp.get("id") or f"cxc-pay-{uuid.uuid4().hex[:10]}"
+        target_cid = cp.get("client_id")
+        pay_amt = float(cp.get("amount_usd") or cp.get("amount") or 0.0)
+        if not target_cid or pay_amt <= 0:
+            continue
+        try:
+            res_c = await db.execute(select(ClientModel).where(ClientModel.id == target_cid))
+            target_cli = res_c.scalar_one_or_none()
+            if target_cli:
+                target_cli.current_debt = max(0.0, float(target_cli.current_debt or 0.0) - pay_amt)
+                target_cli.updated_at = datetime.utcnow()
+                db.add(ClientReceivablesLedgerModel(
+                    id=cpid,
+                    client_id=target_cid,
+                    sale_id=cp.get("sale_id"),
+                    tx_type="PAYMENT",
+                    amount_usd=pay_amt,
+                    exchange_rate=float(cp.get("exchange_rate") or 1.0),
+                    reference=cp.get("reference") or f"Abono en Caja {cr_id or 'POS'}",
+                    notes=cp.get("notes") or f"Abono CxC procesado en terminal {cr_id or 'POS'}",
+                    version=1,
+                    created_at=datetime.utcnow()
+                ))
+                synced_client_uuids.append(cpid)
+        except Exception as cp_err:
+            logger.error(f"[PUSH] Error ingesta abono cliente {cpid}: {cp_err}")
+
+    if clients or client_payments:
+        try:
             await db.commit()
         except Exception as c_commit_err:
             logger.error(f"[PUSH] Error commit clientes: {c_commit_err}")
