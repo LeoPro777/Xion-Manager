@@ -22,10 +22,11 @@ import {
   Minus,
   Check,
   ChevronRight,
+  ChevronDown,
   ArrowRight,
   Sparkles
 } from 'lucide-react';
-import { api } from '../services/api';
+import { api, resolveImageUrl } from '../services/api';
 import { 
   PurchaseRecord, 
   SupplierItem, 
@@ -404,41 +405,36 @@ export const PurchasesPage: React.FC = () => {
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      {/* Top Header with Tab Switcher */}
-      <div className="glass-panel p-3.5 sm:p-4 rounded-xl sm:rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-3 sm:gap-4">
-        <div>
-          <h3 className="text-sm sm:text-base font-bold text-slate-100 flex items-center gap-2">
-            <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 shrink-0" />
-            <span>Módulo de Compras y Proveedores</span>
-          </h3>
-          <p className="text-[11px] sm:text-xs text-slate-400 hidden xs:block">
-            Recepción de pedidos, entrada de lote de inventario, costo promedio y gestión de proveedores
-          </p>
-        </div>
-
-        {/* Tab Buttons */}
-        <div className="flex items-center bg-slate-900 rounded-lg sm:rounded-xl p-1 border border-slate-800 text-xs overflow-x-auto w-full md:w-auto">
+      {/* Top Header with Tab Switcher (Compact & Integrated) */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center bg-slate-900/90 rounded-xl p-1 border border-slate-800 text-xs shadow-inner">
           <button
             onClick={() => setActiveTab('create')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md sm:rounded-lg font-semibold transition-all whitespace-nowrap text-xs ${activeTab === 'create' ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/20' : 'text-slate-400 hover:text-slate-200'}`}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg font-semibold transition-all whitespace-nowrap text-xs ${activeTab === 'create' ? 'bg-[#0d28a6] text-white font-bold shadow-md shadow-blue-900/40' : 'text-slate-400 hover:text-slate-200'}`}
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Entrada de Lote</span>
           </button>
           <button
             onClick={() => setActiveTab('history')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md sm:rounded-lg font-semibold transition-all whitespace-nowrap text-xs ${activeTab === 'history' ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/20' : 'text-slate-400 hover:text-slate-200'}`}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg font-semibold transition-all whitespace-nowrap text-xs ${activeTab === 'history' ? 'bg-[#0d28a6] text-white font-bold shadow-md shadow-blue-900/40' : 'text-slate-400 hover:text-slate-200'}`}
           >
             <FileText className="w-3.5 h-3.5" />
             <span>Historial ({purchases.length})</span>
           </button>
           <button
             onClick={() => setActiveTab('suppliers')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md sm:rounded-lg font-semibold transition-all whitespace-nowrap text-xs ${activeTab === 'suppliers' ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/20' : 'text-slate-400 hover:text-slate-200'}`}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg font-semibold transition-all whitespace-nowrap text-xs ${activeTab === 'suppliers' ? 'bg-[#0d28a6] text-white font-bold shadow-md shadow-blue-900/40' : 'text-slate-400 hover:text-slate-200'}`}
           >
             <Building2 className="w-3.5 h-3.5" />
             <span>Proveedores ({suppliers.length})</span>
           </button>
+        </div>
+
+        {/* Currency rate indicator */}
+        <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400">
+          <span>Tasa Oficial:</span>
+          <span className="font-mono font-bold text-cyan-400">{exchangeRate.toFixed(2)} Bs/$</span>
         </div>
       </div>
 
@@ -480,7 +476,7 @@ export const PurchasesPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setCatalogView('grid')}
-                  className={`p-2 rounded-xl transition-all ${catalogView === 'grid' ? 'bg-[#1a36b4] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  className={`p-2 rounded-xl transition-all ${catalogView === 'grid' ? 'bg-[#0d28a6] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
                   title="Vista Cuadrícula"
                 >
                   <LayoutGrid className="w-4 h-4" />
@@ -488,7 +484,7 @@ export const PurchasesPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setCatalogView('list')}
-                  className={`p-2 rounded-xl transition-all ${catalogView === 'list' ? 'bg-[#1a36b4] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  className={`p-2 rounded-xl transition-all ${catalogView === 'list' ? 'bg-[#0d28a6] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
                   title="Vista Lista"
                 >
                   <List className="w-4 h-4" />
@@ -510,55 +506,61 @@ export const PurchasesPage: React.FC = () => {
                     const stockVal = p.current_stock ?? 100;
                     const costVal = Number(p.cost_price || 0.0);
                     const costBs = Number((costVal * exchangeRate).toFixed(2));
+                    const resolvedImg = resolveImageUrl(p.image_url, 'thumb') || p.image_url;
 
                     return (
                       <div
                         key={p.id}
                         onClick={() => handleAddItemToCart(p.id)}
-                        className={`group bg-white text-slate-900 border rounded-2xl p-3 shadow-sm hover:shadow-md transition-all cursor-pointer relative flex flex-col justify-between min-h-[175px] select-none active:scale-[0.98] ${isAdded ? 'border-blue-500 ring-2 ring-blue-500/10' : 'border-slate-200/90 hover:border-blue-400'}`}
+                        className={`group bg-white text-slate-900 border rounded-2xl p-3 shadow-xs hover:shadow-md transition-all cursor-pointer relative flex flex-col justify-between min-h-[180px] select-none active:scale-[0.98] ${isAdded ? 'border-blue-500 ring-2 ring-blue-500/10' : 'border-slate-200/90 hover:border-blue-400'}`}
                       >
                         {/* Top Stock Badge */}
                         <div className="flex items-center justify-between">
-                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-lg bg-[#1a36b4] text-white shadow-sm">
+                          <span className="px-2.5 py-0.5 text-[10px] font-bold rounded-lg bg-[#0d28a6] text-white shadow-xs">
                             {stockVal}
                           </span>
                           {p.product_type === 'virtual' && (
                             <span className="px-1.5 py-0.5 text-[9px] font-bold rounded-md bg-purple-100 text-purple-700 border border-purple-200 uppercase tracking-wider">
-                              Combo ({p.combo_items?.length || 0} comp)
+                              Combo ({p.combo_items?.length || 0})
                             </span>
                           )}
                         </div>
 
                         {/* Center Product Icon / Image Placeholder */}
-                        <div className="my-auto flex flex-col items-center justify-center py-2">
-                          {p.image_url ? (
-                            <img src={p.image_url} alt={p.name} className="w-12 h-12 object-contain rounded-lg" />
+                        <div className="my-auto flex flex-col items-center justify-center py-2.5">
+                          {resolvedImg ? (
+                            <img src={resolvedImg} alt={p.name} className="w-12 h-12 object-contain rounded-lg" />
                           ) : p.product_type === 'virtual' ? (
                             <>
                               <Layers className="w-11 h-11 text-purple-400 stroke-[1.3] group-hover:text-purple-600 transition-colors" />
-                              <span className="text-[10px] font-mono font-bold text-purple-500 mt-1">KIT</span>
+                              <span className="text-[10px] font-mono font-bold text-purple-500 mt-0.5">KIT</span>
                             </>
                           ) : (
                             <>
-                              <Package className="w-11 h-11 text-slate-300 stroke-[1.3] group-hover:text-blue-500 transition-colors" />
-                              <span className="text-[10px] font-mono font-bold text-slate-400 mt-1">GE</span>
+                              <svg className="w-11 h-11 text-blue-400 stroke-[1.4]" viewBox="0 0 48 48" fill="none" stroke="currentColor">
+                                <path d="M24 6 L40 15 L40 33 L24 42 L8 33 L8 15 Z" strokeLinejoin="round" />
+                                <path d="M24 6 L24 24 L40 15" strokeLinejoin="round" />
+                                <path d="M24 24 L8 15" strokeLinejoin="round" />
+                                <path d="M24 24 L24 42" strokeLinejoin="round" />
+                              </svg>
+                              <span className="text-[10px] font-mono font-bold text-slate-400 mt-0.5">GE</span>
                             </>
                           )}
                         </div>
 
-                        {/* Price Badge on Top-Right or Floating */}
-                        <div className="absolute top-2.5 right-2.5">
-                          <span className="px-2 py-0.5 rounded-lg bg-[#1a36b4] text-white font-mono font-bold text-[11px] shadow-sm">
+                        {/* Price Badge on Top-Right */}
+                        <div className="absolute top-3 right-3">
+                          <span className="px-2.5 py-0.5 rounded-lg bg-[#0d28a6] text-white font-mono font-bold text-[11px] shadow-xs">
                             ${costVal.toFixed(2)}
                           </span>
                         </div>
 
                         {/* Bottom Product Info */}
                         <div className="pt-2 border-t border-slate-100">
-                          <div className="text-[9px] font-mono text-slate-400 truncate uppercase">
+                          <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider truncate">
                             {p.sku || `SKU-${p.id.slice(0, 6)}`}
                           </div>
-                          <div className="text-xs font-bold text-slate-800 line-clamp-2 leading-tight mt-0.5">
+                          <div className="text-xs font-bold text-slate-900 line-clamp-1 leading-snug mt-0.5">
                             {p.name}
                           </div>
                           {p.product_type === 'virtual' && p.combo_items && p.combo_items.length > 0 && (
@@ -566,8 +568,9 @@ export const PurchasesPage: React.FC = () => {
                               Receta: {p.combo_items.map(c => `${c.quantity}x ${c.product_name}`).join(', ')}
                             </div>
                           )}
-                          <div className="text-[10px] font-semibold text-slate-500 mt-1 font-mono">
-                            VES <span className="font-bold">Bs {costBs.toFixed(2)}</span>
+                          <div className="mt-1">
+                            <div className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">VES</div>
+                            <div className="text-xs font-bold text-[#0d28a6] font-mono leading-none">Bs {costBs.toFixed(2)}</div>
                           </div>
                         </div>
                       </div>
@@ -629,19 +632,19 @@ export const PurchasesPage: React.FC = () => {
 
           {/* RIGHT COLUMN: SIDEBAR 'ENTRADA DE LOTE' (DESKTOP) */}
           <div className="w-full lg:w-80 xl:w-96 shrink-0 space-y-4">
-            <div className="bg-white text-slate-900 border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-sm space-y-4">
+            <div className="bg-white text-slate-900 border border-slate-200/90 rounded-3xl p-4 sm:p-5 shadow-xl space-y-4">
               
               {/* Header Box */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-[#1a36b4] flex items-center justify-center text-white shadow-sm">
-                    <Package className="w-4 h-4" />
+                  <div className="w-9 h-9 rounded-xl bg-[#0d28a6] flex items-center justify-center text-white shadow-sm">
+                    <Package className="w-5 h-5" />
                   </div>
                   <div>
                     <h4 className="text-xs font-black tracking-wider text-slate-900 uppercase">
                       ENTRADA DE LOTE
                     </h4>
-                    <span className="text-[11px] text-slate-500 font-medium">
+                    <span className="text-[11px] text-slate-400 font-medium">
                       {cartItems.length} producto{cartItems.length === 1 ? '' : 's'}
                     </span>
                   </div>
@@ -651,67 +654,67 @@ export const PurchasesPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowExpandedModal(true)}
-                  className="px-2.5 py-1 rounded-lg bg-[#1a36b4] hover:bg-blue-800 text-white font-bold text-[11px] flex items-center gap-1 shadow-sm transition-all"
+                  className="px-3 py-1.5 rounded-xl bg-[#0d28a6] hover:bg-blue-800 text-white font-bold text-xs flex items-center gap-1 shadow-sm transition-all"
                 >
-                  <Maximize2 className="w-3 h-3" />
+                  <Maximize2 className="w-3.5 h-3.5" />
                   <span>Desplegar</span>
                 </button>
               </div>
 
               {/* Supplier Selection */}
               <div>
-                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                  Proveedor
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  PROVEEDOR
                 </label>
                 <div className="relative">
-                  <Building2 className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Building2 className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <select
                     value={selectedSupplierId}
                     onChange={e => setSelectedSupplierId(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-800 font-semibold focus:outline-none focus:border-[#1a36b4]"
+                    className="w-full bg-slate-50/70 border border-slate-200/90 rounded-xl pl-9 pr-8 py-2.5 text-xs text-slate-800 font-semibold focus:outline-none focus:border-[#0d28a6] transition-colors appearance-none cursor-pointer"
                   >
                     <option value="">Seleccionar Proveedor...</option>
                     {suppliers.map(s => (
                       <option key={s.id} value={s.id}>{s.name} ({s.rif})</option>
                     ))}
                   </select>
+                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 </div>
               </div>
 
               {/* Items List in Sidebar */}
               <div className="space-y-2">
-                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                  Artículos Añadidos
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  ARTÍCULOS AÑADIDOS
                 </div>
-                <div className="max-h-64 overflow-y-auto divide-y divide-slate-100 border border-slate-100 rounded-xl p-2 bg-slate-50/50">
+                <div className="max-h-64 overflow-y-auto space-y-2 pr-0.5">
                   {cartItems.length === 0 ? (
-                    <div className="text-center py-8 text-slate-400 text-xs">
+                    <div className="text-center py-8 px-3 text-slate-400 text-xs bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
                       No hay productos añadidos al lote. Haz clic en las tarjetas del catálogo.
                     </div>
                   ) : (
                     cartItems.map((item, idx) => (
-                      <div key={idx} className="py-2.5 first:pt-1 last:pb-1 flex items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="text-xs font-bold text-slate-800 truncate leading-snug">
+                      <div key={idx} className="p-3 rounded-xl border border-slate-200/90 bg-white shadow-xs space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-slate-900 truncate">
                             {item.product_name}
-                          </div>
-                          <div className="text-[10px] text-slate-400 font-mono">
-                            x{item.quantity} · ${(item.cost_usd).toFixed(2)}
+                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-xs font-black text-[#0d28a6] font-mono">
+                              ${item.total_usd.toFixed(2)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveCartItem(idx)}
+                              className="text-slate-400 hover:text-rose-500 p-0.5 rounded transition-colors"
+                              title="Eliminar de la entrada"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
-
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-xs font-black text-[#1a36b4] font-mono">
-                            ${item.total_usd.toFixed(2)}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveCartItem(idx)}
-                            className="text-slate-400 hover:text-rose-500 p-1 rounded transition-colors"
-                            title="Eliminar de la entrada"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          x{item.quantity} · ${item.cost_usd.toFixed(2)}
                         </div>
                       </div>
                     ))
@@ -720,8 +723,8 @@ export const PurchasesPage: React.FC = () => {
               </div>
 
               {/* Sidebar Totals Summary */}
-              <div className="pt-2 border-t border-slate-100">
-                <div className="grid grid-cols-2 gap-2 items-center mb-3">
+              <div className="pt-3 border-t border-slate-100">
+                <div className="grid grid-cols-2 gap-2 items-center mb-3.5">
                   <div>
                     <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                       TOTAL USD
@@ -735,7 +738,7 @@ export const PurchasesPage: React.FC = () => {
                     <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                       MONEDA LOCAL
                     </div>
-                    <div className="mt-0.5 inline-block px-2.5 py-1 rounded-lg bg-[#1a36b4] text-white font-mono font-bold text-xs shadow-sm">
+                    <div className="mt-1 inline-block px-3 py-1 rounded-lg bg-[#0d28a6] text-white font-mono font-bold text-xs shadow-xs">
                       BS {totalCartBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })}
                     </div>
                   </div>
@@ -746,7 +749,7 @@ export const PurchasesPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowExpandedModal(true)}
-                    className="w-full py-2.5 rounded-xl bg-white border border-blue-600/80 text-blue-700 hover:bg-blue-50 font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm"
+                    className="w-full py-2.5 rounded-xl border border-blue-500 text-blue-600 hover:bg-blue-50 font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all"
                   >
                     <Maximize2 className="w-3.5 h-3.5" />
                     <span>DESPLEGAR TABLA COMPLETA</span>
@@ -756,7 +759,7 @@ export const PurchasesPage: React.FC = () => {
                     type="button"
                     onClick={() => setShowLiquidationModal(true)}
                     disabled={cartItems.length === 0}
-                    className="w-full py-3 rounded-xl bg-[#6f7ec5] hover:bg-[#5e6db8] text-white font-bold text-xs tracking-wider uppercase transition-all shadow-md shadow-indigo-500/10 disabled:opacity-50 active:scale-[0.99]"
+                    className="w-full py-3.5 rounded-xl bg-[#7a88d6] hover:bg-[#6c7bc9] text-white font-bold text-xs uppercase tracking-wider shadow-md shadow-indigo-300/30 transition-all active:scale-[0.99] disabled:opacity-50"
                   >
                     LIQUIDAR INGRESO
                   </button>
@@ -792,7 +795,7 @@ export const PurchasesPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setShowLiquidationModal(true)}
-              className="px-4 py-2 rounded-xl bg-[#6f7ec5] text-white font-bold text-xs shadow-md shadow-indigo-500/20"
+              className="px-4 py-2 rounded-xl bg-[#7a88d6] text-white font-bold text-xs shadow-md shadow-indigo-300/30"
             >
               Liquidar Ingreso
             </button>
@@ -810,7 +813,7 @@ export const PurchasesPage: React.FC = () => {
             {/* Modal Header */}
             <div className="p-4 sm:p-5 border-b border-slate-200/80 flex items-center justify-between bg-white shrink-0">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-[#1a36b4] flex items-center justify-center text-white shadow-sm">
+                <div className="w-8 h-8 rounded-xl bg-[#0d28a6] flex items-center justify-center text-white shadow-sm">
                   <Package className="w-4 h-4" />
                 </div>
                 <h3 className="text-sm sm:text-base font-black text-slate-900 tracking-wide uppercase">
@@ -1073,7 +1076,7 @@ export const PurchasesPage: React.FC = () => {
                   <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
                     TOTAL BS (MONEDA LOCAL)
                   </div>
-                  <div className="inline-block px-3 py-1.5 rounded-xl bg-[#1a36b4] text-white font-mono font-black text-xs sm:text-sm shadow-sm">
+                  <div className="inline-block px-3 py-1.5 rounded-xl bg-[#0d28a6] text-white font-mono font-bold text-xs sm:text-sm shadow-xs">
                     Bs {totalCartBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })}
                   </div>
                 </div>
@@ -1086,7 +1089,7 @@ export const PurchasesPage: React.FC = () => {
                   setShowLiquidationModal(true);
                 }}
                 disabled={cartItems.length === 0}
-                className="w-full py-3.5 rounded-xl bg-[#6f7ec5] hover:bg-[#5e6db8] text-white font-black text-xs sm:text-sm tracking-wider uppercase transition-all shadow-lg shadow-indigo-500/15 disabled:opacity-50"
+                className="w-full py-3.5 rounded-xl bg-[#7a88d6] hover:bg-[#6c7bc9] text-white font-bold text-xs sm:text-sm tracking-wider uppercase transition-all shadow-md shadow-indigo-300/30 disabled:opacity-50"
               >
                 LIQUIDAR RECEPCIÓN DE INGRESO
               </button>
