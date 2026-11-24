@@ -32,7 +32,8 @@ import {
   Sparkles,
   AlertTriangle,
   Lock,
-  ShieldAlert
+  ShieldAlert,
+  ShoppingBag
 } from 'lucide-react';
 import { api, applySystemPreferences } from '../services/api';
 import { NotificationItem, Role, User } from '../types';
@@ -143,6 +144,7 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
 
   const navItems = [
     { id: 'dashboard', label: 'Panel Principal', icon: LayoutDashboard },
+    { id: 'sales', label: 'Ventas y Facturación', icon: ShoppingBag },
     { id: 'branches', label: 'Sucursales y Cajas', icon: Store },
     { id: 'inventory', label: 'Inventario y Traslados', icon: Package },
     { id: 'purchases', label: 'Compras y Proveedores', icon: ShoppingCart },
@@ -156,6 +158,7 @@ export const DashboardLayout: React.FC<LayoutProps> = ({
 
   const tabTitles: Record<string, string> = {
     dashboard: 'Panel Principal',
+    sales: 'Ventas y Facturación',
     branches: 'Sucursales y Cajas',
     inventory: 'Inventario y Traslados',
     purchases: 'Compras y Proveedores',

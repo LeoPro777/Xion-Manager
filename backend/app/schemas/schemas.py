@@ -688,6 +688,127 @@ class ClientLedgerResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+# ========================================================
+# Sales, Multi-Payment & POS Transactional Schemas
+# ========================================================
+
+class SalePaymentCreate(BaseModel):
+    payment_method_id: str
+    payment_method_label: Optional[str] = None
+    currency: Optional[str] = "USD"
+    exchange_rate: Optional[float] = 1.0
+    amount_tendered: float = Field(..., gt=0)
+    amount_usd: float = Field(..., gt=0)
+    reference_code: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class SaleItemCreate(BaseModel):
+    product_id: str
+    product_name: Optional[str] = None
+    quantity: float = Field(..., gt=0)
+    unit_price_usd: float = Field(..., ge=0)
+    tax_rate: Optional[float] = 16.0
+    tax_amount_usd: Optional[float] = 0.0
+    total_price_usd: float = Field(..., ge=0)
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class SaleCreate(BaseModel):
+    client_id: Optional[str] = None
+    client_name: Optional[str] = "Cliente Final"
+    branch_id: Optional[str] = None
+    cash_session_id: Optional[str] = None
+    cash_register_id: Optional[str] = None
+    device_id: Optional[str] = None
+    invoice_number: Optional[str] = None
+    subtotal_usd: float = Field(..., ge=0)
+    tax_amount_usd: Optional[float] = 0.0
+    igtf_amount_usd: Optional[float] = 0.0
+    total_amount_usd: float = Field(..., ge=0)
+    total_amount_bs: Optional[float] = 0.0
+    exchange_rate: Optional[float] = 1.0
+    payments: List[SalePaymentCreate] = Field(default_factory=list)
+    items: List[SaleItemCreate] = Field(..., min_length=1)
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class SaleRefundRequest(BaseModel):
+    reason: str = Field(..., min_length=3)
+    supervisor_id: Optional[str] = None
+    restock_items: Optional[bool] = True
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class CashSessionOpen(BaseModel):
+    branch_id: Optional[str] = None
+    cash_register_id: Optional[str] = None
+    opening_balance_usd: float = Field(default=0.0, ge=0)
+    opening_balance_bs: float = Field(default=0.0, ge=0)
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class CashSessionClose(BaseModel):
+    closing_balance_usd: float = Field(..., ge=0)
+    closing_balance_bs: float = Field(..., ge=0)
+    difference_notes: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class CashSessionResponse(BaseModel):
+    id: str
+    business_id: str
+    branch_id: str
+    cash_register_id: Optional[str] = None
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    status: str
+    opening_balance_usd: float
+    opening_balance_bs: float
+    closing_balance_usd: Optional[float] = None
+    closing_balance_bs: Optional[float] = None
+    total_sales_usd: float = 0.0
+    total_sales_bs: float = 0.0
+    difference_notes: Optional[str] = None
+    opening_time: Optional[str] = None
+    closing_time: Optional[str] = None
+    created_at: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class SaleResponse(BaseModel):
+    id: str
+    business_id: str
+    branch_id: str
+    cash_session_id: Optional[str] = None
+    device_id: Optional[str] = None
+    cash_register_id: Optional[str] = None
+    client_id: Optional[str] = None
+    client_name: str = "Cliente Final"
+    invoice_number: Optional[str] = None
+    subtotal_usd: float
+    tax_amount_usd: float = 0.0
+    igtf_amount_usd: float = 0.0
+    total_amount_usd: float
+    total_amount_bs: float
+    exchange_rate: float
+    status: str
+    items_count: Optional[int] = 0
+    payments: Optional[List[dict]] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+
 
 
 

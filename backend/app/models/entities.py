@@ -454,5 +454,135 @@ class ClientReceivablesLedger(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class CashSession(Base):
+    __tablename__ = "cash_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True)
+    cash_register_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    user_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="open", index=True) # open, closed
+    opening_balance_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    opening_balance_bs: Mapped[float] = mapped_column(Numeric(14, 2), default=0.0)
+    closing_balance_usd: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    closing_balance_bs: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    total_sales_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    total_sales_bs: Mapped[float] = mapped_column(Numeric(14, 2), default=0.0)
+    difference_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    opening_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    closing_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Sale(Base):
+    __tablename__ = "sales"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True)
+    cash_session_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    device_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    cash_register_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    client_id: Mapped[Optional[str]] = mapped_column(ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True)
+    client_name: Mapped[str] = mapped_column(String(255), default="Cliente Final")
+    invoice_number: Mapped[Optional[str]] = mapped_column(String(60), nullable=True, index=True)
+    subtotal_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    tax_amount_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    igtf_amount_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    total_amount_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    total_amount_bs: Mapped[float] = mapped_column(Numeric(14, 2), default=0.0)
+    exchange_rate: Mapped[float] = mapped_column(Numeric(12, 4), default=1.0)
+    status: Mapped[str] = mapped_column(String(20), default="completed", index=True) # completed, refunded, cancelled
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    is_synced: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SaleItem(Base):
+    __tablename__ = "sale_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    sale_id: Mapped[str] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    product_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    quantity: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False)
+    unit_price_usd: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    tax_rate: Mapped[float] = mapped_column(Numeric(5, 2), default=16.0)
+    tax_amount_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    total_price_usd: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+
+
+class SalePayment(Base):
+    __tablename__ = "sale_payments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    sale_id: Mapped[str] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"), nullable=False, index=True)
+    payment_method_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    payment_method_label: Mapped[str] = mapped_column(String(100), nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), default="USD")
+    exchange_rate: Mapped[float] = mapped_column(Numeric(12, 4), default=1.0)
+    amount_tendered: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    amount_usd: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    reference_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DeliveryNote(Base):
+    __tablename__ = "delivery_notes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True)
+    sale_id: Mapped[Optional[str]] = mapped_column(ForeignKey("sales.id", ondelete="SET NULL"), nullable=True, index=True)
+    document_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    client_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    client_name: Mapped[str] = mapped_column(String(255), default="Cliente Final")
+    status: Mapped[str] = mapped_column(String(20), default="EMITIDA", index=True) # EMITIDA, ANULADA
+    subtotal_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    total_amount_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    total_amount_bs: Mapped[float] = mapped_column(Numeric(14, 2), default=0.0)
+    exchange_rate: Mapped[float] = mapped_column(Numeric(12, 4), default=1.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DeliveryNoteItem(Base):
+    __tablename__ = "delivery_note_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    delivery_note_id: Mapped[str] = mapped_column(ForeignKey("delivery_notes.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    product_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    quantity: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False)
+    unit_price_usd: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    total_price_usd: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+
+
+class Return(Base):
+    __tablename__ = "returns"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    sale_id: Mapped[str] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"), nullable=False, index=True)
+    supervisor_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    refund_amount_usd: Mapped[float] = mapped_column(Numeric(12, 2), default=0.0)
+    restock_items: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ReturnItem(Base):
+    __tablename__ = "return_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    return_id: Mapped[str] = mapped_column(ForeignKey("returns.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    quantity: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False)
+    unit_price_usd: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+
+
+
 
 

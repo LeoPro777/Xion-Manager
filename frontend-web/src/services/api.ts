@@ -2603,8 +2603,157 @@ export const api = {
       // offline fallback
     }
     return 1000.0;
+  },
+
+  // ==========================================
+  // Ecosistema Transaccional de Ventas (Sales API)
+  // ==========================================
+
+  async getSales(search?: string, status?: string, branchId?: string): Promise<Sale[]> {
+    try {
+      const params = new URLSearchParams();
+      if (search) params.append('search', search);
+      if (status && status !== 'ALL') params.append('status', status.toLowerCase());
+      if (branchId) params.append('branch_id', branchId);
+      const res = await fetch(`/api/v1/sales?${params.toString()}`, { headers: authHeaders() });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn('Fallback a ventas locales/memoria', e);
+    }
+    return [];
+  },
+
+  async getSaleDetail(saleId: string): Promise<Sale> {
+    const res = await fetch(`/api/v1/sales/${saleId}`, { headers: authHeaders() });
+    if (!res.ok) {
+      throw new Error('Error al cargar detalle de la venta');
+    }
+    return await res.json();
+  },
+
+  async getSaleTicket(saleId: string): Promise<any> {
+    const res = await fetch(`/api/v1/sales/${saleId}/ticket`, { headers: authHeaders() });
+    if (!res.ok) {
+      throw new Error('Error al generar ticket de venta');
+    }
+    return await res.json();
+  },
+
+  async createSale(payload: any): Promise<any> {
+    const res = await fetch('/api/v1/sales', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Error al procesar la venta');
+    }
+    return await res.json();
+  },
+
+  async refundSale(saleId: string, payload: { reason: string; supervisor_id?: string; restock_items?: boolean }): Promise<any> {
+    const res = await fetch(`/api/v1/sales/${saleId}/refund`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Error al procesar el reembolso');
+    }
+    return await res.json();
+  },
+
+  async getDeliveryNotes(): Promise<DeliveryNote[]> {
+    try {
+      const res = await fetch('/api/v1/delivery-notes', { headers: authHeaders() });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn('Fallback notas de entrega', e);
+    }
+    return [];
+  },
+
+  async voidDeliveryNote(id: string): Promise<any> {
+    const res = await fetch(`/api/v1/delivery-notes/${id}/void`, {
+      method: 'POST',
+      headers: authHeaders()
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Error al anular nota de entrega');
+    }
+    return await res.json();
   }
 };
+
+export interface SaleItem {
+  id?: string;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  unit_price_usd: number;
+  tax_rate?: number;
+  tax_amount_usd?: number;
+  total_price_usd: number;
+}
+
+export interface SalePayment {
+  id?: string;
+  payment_method_id: string;
+  payment_method_label: string;
+  currency: string;
+  exchange_rate?: number;
+  amount_tendered: number;
+  amount_usd: number;
+  reference_code?: string | null;
+}
+
+export interface Sale {
+  id: string;
+  business_id?: string;
+  branch_id?: string;
+  cash_session_id?: string | null;
+  device_id?: string | null;
+  cash_register_id?: string | null;
+  client_id?: string | null;
+  client_name: string;
+  invoice_number?: string;
+  subtotal_usd: number;
+  tax_amount_usd: number;
+  igtf_amount_usd: number;
+  total_amount_usd: number;
+  total_amount_bs: number;
+  exchange_rate: number;
+  status: 'completed' | 'refunded' | 'cancelled';
+  items_count?: number;
+  payments?: SalePayment[];
+  items?: SaleItem[];
+  delivery_note?: {
+    id: string;
+    document_number: string;
+    status: string;
+  } | null;
+  created_at: string;
+}
+
+export interface DeliveryNote {
+  id: string;
+  document_number: string;
+  sale_id?: string | null;
+  client_name: string;
+  status: 'EMITIDA' | 'ANULADA';
+  subtotal_usd: number;
+  total_amount_usd: number;
+  total_amount_bs: number;
+  exchange_rate: number;
+  created_at: string;
+}
 
 export const DEFAULT_PREFERENCES: SystemPreferences = {
   theme_mode: 'dark',

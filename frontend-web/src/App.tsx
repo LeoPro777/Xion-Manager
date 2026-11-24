@@ -14,6 +14,7 @@ import { PaymentMethodsPage } from './pages/PaymentMethodsPage';
 import { PaymentReportsPage } from './pages/PaymentReportsPage';
 import { PreferencesPage } from './pages/PreferencesPage';
 import { ClientsPage } from './pages/ClientsPage';
+import { SalesPage } from './pages/SalesPage';
 import { OnboardingWizardModal } from './components/OnboardingWizardModal';
 import { AppLoadingScreen } from './components/AppLoadingScreen';
 import { PendingPairingScreen } from './components/PendingPairingScreen';
@@ -154,6 +155,8 @@ export const App: React.FC = () => {
     switch (activeTab) {
       case 'dashboard':
         return <DashboardPage />;
+      case 'sales':
+        return <SalesPage />;
       case 'branches':
         return <BranchesPage />;
       case 'inventory':

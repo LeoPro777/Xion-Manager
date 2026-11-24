@@ -142,6 +142,10 @@ async def on_startup():
                 await conn.execute(text("ALTER TABLE cash_registers ADD COLUMN IF NOT EXISTS device_token TEXT;"))
                 await conn.execute(text("ALTER TABLE cash_registers ADD COLUMN IF NOT EXISTS paired_at TIMESTAMP WITHOUT TIME ZONE;"))
                 await conn.execute(text("ALTER TABLE cash_registers ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITHOUT TIME ZONE;"))
+                await conn.execute(text("ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS business_id VARCHAR(36);"))
+                await conn.execute(text("ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS branch_id VARCHAR(36);"))
+                await conn.execute(text("ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS user_id VARCHAR(36);"))
+                await conn.execute(text("ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS terminal_id VARCHAR(64);"))
             except Exception:
                 pass
 
@@ -258,6 +262,140 @@ async def on_startup():
                 """))
             except Exception:
                 pass
+
+            # 6. Ecosistema Transaccional de Ventas (Sales, Items, Payments, Sessions, Delivery Notes, Returns)
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS cash_sessions (
+                    id VARCHAR(36) PRIMARY KEY,
+                    business_id VARCHAR(36) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+                    branch_id VARCHAR(36) NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+                    cash_register_id VARCHAR(36) NULL,
+                    user_id VARCHAR(36) NULL,
+                    user_email VARCHAR(255) NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'open',
+                    opening_balance_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    opening_balance_bs NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+                    closing_balance_usd NUMERIC(12, 2) NULL,
+                    closing_balance_bs NUMERIC(14, 2) NULL,
+                    total_sales_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    total_sales_bs NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+                    difference_notes TEXT NULL,
+                    opening_time TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+                    closing_time TIMESTAMP WITHOUT TIME ZONE NULL,
+                    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+                );
+                CREATE INDEX IF NOT EXISTS idx_cash_sessions_business ON cash_sessions(business_id);
+                CREATE INDEX IF NOT EXISTS idx_cash_sessions_branch ON cash_sessions(branch_id);
+                CREATE INDEX IF NOT EXISTS idx_cash_sessions_status ON cash_sessions(status);
+
+                CREATE TABLE IF NOT EXISTS sales (
+                    id VARCHAR(36) PRIMARY KEY,
+                    business_id VARCHAR(36) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+                    branch_id VARCHAR(36) NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+                    cash_session_id VARCHAR(36) NULL,
+                    device_id VARCHAR(64) NULL,
+                    cash_register_id VARCHAR(36) NULL,
+                    client_id VARCHAR(36) NULL REFERENCES clients(id) ON DELETE SET NULL,
+                    client_name VARCHAR(255) NOT NULL DEFAULT 'Cliente Final',
+                    invoice_number VARCHAR(60) NULL,
+                    subtotal_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    tax_amount_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    igtf_amount_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    total_amount_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    total_amount_bs NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+                    exchange_rate NUMERIC(12, 4) NOT NULL DEFAULT 1.0000,
+                    status VARCHAR(20) NOT NULL DEFAULT 'completed',
+                    version INTEGER NOT NULL DEFAULT 1,
+                    is_synced BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+                    updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+                );
+                CREATE INDEX IF NOT EXISTS idx_sales_business ON sales(business_id);
+                CREATE INDEX IF NOT EXISTS idx_sales_branch ON sales(branch_id);
+                CREATE INDEX IF NOT EXISTS idx_sales_session ON sales(cash_session_id);
+                CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at);
+                CREATE INDEX IF NOT EXISTS idx_sales_invoice ON sales(invoice_number);
+
+                CREATE TABLE IF NOT EXISTS sale_items (
+                    id VARCHAR(36) PRIMARY KEY,
+                    sale_id VARCHAR(36) NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+                    product_id VARCHAR(36) NOT NULL,
+                    product_name VARCHAR(255) NOT NULL,
+                    quantity NUMERIC(12, 3) NOT NULL,
+                    unit_price_usd NUMERIC(12, 2) NOT NULL,
+                    tax_rate NUMERIC(5, 2) NOT NULL DEFAULT 16.00,
+                    tax_amount_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    total_price_usd NUMERIC(12, 2) NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
+                CREATE INDEX IF NOT EXISTS idx_sale_items_product ON sale_items(product_id);
+
+                CREATE TABLE IF NOT EXISTS sale_payments (
+                    id VARCHAR(36) PRIMARY KEY,
+                    sale_id VARCHAR(36) NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+                    payment_method_id VARCHAR(50) NOT NULL,
+                    payment_method_label VARCHAR(100) NOT NULL,
+                    currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+                    exchange_rate NUMERIC(12, 4) NOT NULL DEFAULT 1.0000,
+                    amount_tendered NUMERIC(14, 2) NOT NULL,
+                    amount_usd NUMERIC(12, 2) NOT NULL,
+                    reference_code VARCHAR(100) NULL,
+                    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+                );
+                CREATE INDEX IF NOT EXISTS idx_sale_payments_sale ON sale_payments(sale_id);
+                CREATE INDEX IF NOT EXISTS idx_sale_payments_method ON sale_payments(payment_method_id);
+
+                CREATE TABLE IF NOT EXISTS delivery_notes (
+                    id VARCHAR(36) PRIMARY KEY,
+                    business_id VARCHAR(36) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+                    branch_id VARCHAR(36) NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+                    sale_id VARCHAR(36) NULL REFERENCES sales(id) ON DELETE SET NULL,
+                    document_number VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(36) NULL,
+                    client_name VARCHAR(255) NOT NULL DEFAULT 'Cliente Final',
+                    status VARCHAR(20) NOT NULL DEFAULT 'EMITIDA',
+                    subtotal_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    total_amount_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    total_amount_bs NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+                    exchange_rate NUMERIC(12, 4) NOT NULL DEFAULT 1.0000,
+                    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+                );
+                CREATE INDEX IF NOT EXISTS idx_delivery_notes_business ON delivery_notes(business_id);
+                CREATE INDEX IF NOT EXISTS idx_delivery_notes_doc ON delivery_notes(document_number);
+
+                CREATE TABLE IF NOT EXISTS delivery_note_items (
+                    id VARCHAR(36) PRIMARY KEY,
+                    delivery_note_id VARCHAR(36) NOT NULL REFERENCES delivery_notes(id) ON DELETE CASCADE,
+                    product_id VARCHAR(36) NOT NULL,
+                    product_name VARCHAR(255) NOT NULL,
+                    quantity NUMERIC(12, 3) NOT NULL,
+                    unit_price_usd NUMERIC(12, 2) NOT NULL,
+                    total_price_usd NUMERIC(12, 2) NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_delivery_note_items_dn ON delivery_note_items(delivery_note_id);
+
+                CREATE TABLE IF NOT EXISTS returns (
+                    id VARCHAR(36) PRIMARY KEY,
+                    business_id VARCHAR(36) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+                    sale_id VARCHAR(36) NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+                    supervisor_id VARCHAR(36) NULL,
+                    reason TEXT NOT NULL,
+                    refund_amount_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+                    restock_items BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+                );
+                CREATE INDEX IF NOT EXISTS idx_returns_business ON returns(business_id);
+                CREATE INDEX IF NOT EXISTS idx_returns_sale ON returns(sale_id);
+
+                CREATE TABLE IF NOT EXISTS return_items (
+                    id VARCHAR(36) PRIMARY KEY,
+                    return_id VARCHAR(36) NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+                    product_id VARCHAR(36) NOT NULL,
+                    quantity NUMERIC(12, 3) NOT NULL,
+                    unit_price_usd NUMERIC(12, 2) NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_return_items_ret ON return_items(return_id);
+            """))
     except Exception:
         pass
 
