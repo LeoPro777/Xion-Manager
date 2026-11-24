@@ -280,44 +280,54 @@ class SupplierPayableLedgerItem(BaseModel):
 
 class SupplierCreate(BaseModel):
     name: str
-    rif: str
+    identification_type: Optional[str] = "RIF"
+    identification_number: Optional[str] = None
+    rif: Optional[str] = None
     email: Optional[str] = ""
     phone: Optional[str] = ""
     address: Optional[str] = ""
     category: Optional[str] = "Varios"
+    payment_terms: Optional[str] = None
     payment_terms_days: Optional[int] = 15
+    notes: Optional[str] = None
     is_active: bool = True
 
 class SupplierUpdate(BaseModel):
     name: Optional[str] = None
+    identification_type: Optional[str] = None
+    identification_number: Optional[str] = None
     rif: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
     category: Optional[str] = None
+    payment_terms: Optional[str] = None
     payment_terms_days: Optional[int] = None
+    notes: Optional[str] = None
     is_active: Optional[bool] = None
 
 class PurchaseItemCreate(BaseModel):
     product_id: str
-    product_name: str
+    product_name: Optional[str] = None
     product_sku: Optional[str] = ""
     quantity: float = Field(..., gt=0)
     lot_number: Optional[str] = None
-    cost_usd: float = Field(..., ge=0)
+    unit_cost_usd: Optional[float] = None
+    cost_usd: Optional[float] = None
     cost_bs: Optional[float] = 0.0
-    total_usd: float = Field(..., ge=0)
+    total_cost_usd: Optional[float] = None
+    total_usd: Optional[float] = None
 
 class PurchaseCreate(BaseModel):
     supplier_id: Optional[str] = None
-    supplier_name: str
+    supplier_name: Optional[str] = "Proveedor General"
     supplier_rif: Optional[str] = "J-00000000-0"
-    invoice_number: str
-    branch_id: str
+    invoice_number: Optional[str] = None
+    branch_id: Optional[str] = None
     branch_name: Optional[str] = None
     total_amount_usd: float = Field(..., ge=0)
     total_amount_bs: Optional[float] = 0.0
-    exchange_rate: Optional[float] = 37.50
+    exchange_rate: Optional[float] = 1.0
     payment_type: str = "cash"
     paid_amount_usd: Optional[float] = None
     credit_days: Optional[int] = 0
@@ -326,8 +336,9 @@ class PurchaseCreate(BaseModel):
 
 class PurchasePayDTO(BaseModel):
     amount_usd: float = Field(..., gt=0)
-    exchange_rate: Optional[float] = 37.50
+    exchange_rate: Optional[float] = 1.0
     notes: Optional[str] = None
+    reference: Optional[str] = None
 
 class PaymentMethodCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)

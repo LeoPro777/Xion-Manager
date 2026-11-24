@@ -260,16 +260,21 @@ class Supplier(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     identification_type: Mapped[str] = mapped_column(String(20), default="RIF")
-    rif: Mapped[str] = mapped_column(String(50), nullable=False)
-    email: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    rif: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    identification_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     category: Mapped[str] = mapped_column(String(100), default="Varios")
+    payment_terms: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     payment_terms_days: Mapped[int] = mapped_column(Integer, default=15)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     current_balance_usd: Mapped[float] = mapped_column(Numeric(14, 2), default=0.0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -280,19 +285,21 @@ class Purchase(Base):
     business_id: Mapped[str] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
     branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True)
     supplier_id: Mapped[Optional[str]] = mapped_column(ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True)
-    supplier_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    supplier_rif: Mapped[str] = mapped_column(String(50), default="J-00000000-0")
-    invoice_number: Mapped[str] = mapped_column(String(80), nullable=False)
+    supplier_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    supplier_rif: Mapped[Optional[str]] = mapped_column(String(50), default="J-00000000-0")
+    invoice_number: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     total_amount_usd: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     total_amount_bs: Mapped[float] = mapped_column(Numeric(16, 2), nullable=False)
-    exchange_rate: Mapped[float] = mapped_column(Numeric(12, 4), default=37.5)
-    payment_type: Mapped[str] = mapped_column(String(20), default="cash")
-    payment_status: Mapped[str] = mapped_column(String(20), default="paid")
+    exchange_rate: Mapped[float] = mapped_column(Numeric(12, 4), default=1.0)
+    payment_type: Mapped[str] = mapped_column(String(20), default="cash") # cash, credit
+    payment_status: Mapped[str] = mapped_column(String(20), default="paid") # paid, pending, partial
     paid_amount_usd: Mapped[float] = mapped_column(Numeric(14, 2), default=0.0)
     pending_amount_usd: Mapped[float] = mapped_column(Numeric(14, 2), default=0.0)
     credit_days: Mapped[int] = mapped_column(Integer, default=0)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    is_synced: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class PurchaseItem(Base):
@@ -300,25 +307,29 @@ class PurchaseItem(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     purchase_id: Mapped[str] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"), nullable=False, index=True)
-    product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    product_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     quantity: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
-    lot_number: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
-    cost_usd: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
+    unit_cost_usd: Mapped[Optional[float]] = mapped_column(Numeric(12, 4), nullable=True)
+    cost_usd: Mapped[float] = mapped_column(Numeric(12, 4), default=0.0)
     cost_bs: Mapped[float] = mapped_column(Numeric(14, 4), default=0.0)
-    total_usd: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    total_cost_usd: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    total_usd: Mapped[float] = mapped_column(Numeric(14, 2), default=0.0)
+    lot_number: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
 
 class SupplierPayablesLedger(Base):
     __tablename__ = "supplier_payables_ledger"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    supplier_id: Mapped[str] = mapped_column(ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False)
-    purchase_id: Mapped[Optional[str]] = mapped_column(ForeignKey("purchases.id", ondelete="SET NULL"), nullable=True)
-    tx_type: Mapped[str] = mapped_column(String(30), default="CHARGE")
+    supplier_id: Mapped[str] = mapped_column(ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=False, index=True)
+    purchase_id: Mapped[Optional[str]] = mapped_column(ForeignKey("purchases.id", ondelete="SET NULL"), nullable=True, index=True)
+    tx_type: Mapped[str] = mapped_column(String(30), default="CHARGE") # CHARGE, PAYMENT, DISCOUNT
     amount_usd: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
-    exchange_rate: Mapped[float] = mapped_column(Numeric(12, 4), default=37.5)
+    exchange_rate: Mapped[float] = mapped_column(Numeric(12, 4), default=1.0)
     reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 class InventoryTransaction(Base):
     __tablename__ = "inventory_transactions"

@@ -146,6 +146,17 @@ async def on_startup():
                 await conn.execute(text("ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS branch_id VARCHAR(36);"))
                 await conn.execute(text("ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS user_id VARCHAR(36);"))
                 await conn.execute(text("ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS terminal_id VARCHAR(64);"))
+                await conn.execute(text("ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS identification_number VARCHAR(50);"))
+                await conn.execute(text("ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(100);"))
+                await conn.execute(text("ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS notes TEXT;"))
+                await conn.execute(text("ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1;"))
+                await conn.execute(text("ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITHOUT TIME ZONE;"))
+                await conn.execute(text("ALTER TABLE purchases ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1;"))
+                await conn.execute(text("ALTER TABLE purchases ADD COLUMN IF NOT EXISTS is_synced BOOLEAN DEFAULT FALSE;"))
+                await conn.execute(text("ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS unit_cost_usd NUMERIC(12, 4);"))
+                await conn.execute(text("ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS total_cost_usd NUMERIC(14, 2);"))
+                await conn.execute(text("ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS product_name VARCHAR(255);"))
+                await conn.execute(text("ALTER TABLE supplier_payables_ledger ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1;"))
             except Exception:
                 pass
 
