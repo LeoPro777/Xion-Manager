@@ -522,12 +522,22 @@ export const PurchasesPage: React.FC = () => {
                           <span className="px-2 py-0.5 text-[10px] font-bold rounded-lg bg-[#1a36b4] text-white shadow-sm">
                             {stockVal}
                           </span>
+                          {p.product_type === 'virtual' && (
+                            <span className="px-1.5 py-0.5 text-[9px] font-bold rounded-md bg-purple-100 text-purple-700 border border-purple-200 uppercase tracking-wider">
+                              Combo ({p.combo_items?.length || 0} comp)
+                            </span>
+                          )}
                         </div>
 
                         {/* Center Product Icon / Image Placeholder */}
                         <div className="my-auto flex flex-col items-center justify-center py-2">
                           {p.image_url ? (
                             <img src={p.image_url} alt={p.name} className="w-12 h-12 object-contain rounded-lg" />
+                          ) : p.product_type === 'virtual' ? (
+                            <>
+                              <Layers className="w-11 h-11 text-purple-400 stroke-[1.3] group-hover:text-purple-600 transition-colors" />
+                              <span className="text-[10px] font-mono font-bold text-purple-500 mt-1">KIT</span>
+                            </>
                           ) : (
                             <>
                               <Package className="w-11 h-11 text-slate-300 stroke-[1.3] group-hover:text-blue-500 transition-colors" />
@@ -551,6 +561,11 @@ export const PurchasesPage: React.FC = () => {
                           <div className="text-xs font-bold text-slate-800 line-clamp-2 leading-tight mt-0.5">
                             {p.name}
                           </div>
+                          {p.product_type === 'virtual' && p.combo_items && p.combo_items.length > 0 && (
+                            <div className="text-[9px] text-purple-600 font-medium truncate mt-0.5" title={p.combo_items.map(c => `${c.quantity}x ${c.product_name}`).join(', ')}>
+                              Receta: {p.combo_items.map(c => `${c.quantity}x ${c.product_name}`).join(', ')}
+                            </div>
+                          )}
                           <div className="text-[10px] font-semibold text-slate-500 mt-1 font-mono">
                             VES <span className="font-bold">Bs {costBs.toFixed(2)}</span>
                           </div>

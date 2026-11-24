@@ -3590,19 +3590,32 @@ async def list_products(
         combo_map: Dict[str, List[dict]] = {}
         if combo_parent_ids:
             c_res = await db.execute(
-                select(ProductCompositionModel, ProductModel.name)
+                select(ProductCompositionModel, ProductModel.name, ProductModel.current_stock)
                 .join(ProductModel, ProductCompositionModel.child_id == ProductModel.id, isouter=True)
                 .where(ProductCompositionModel.parent_id.in_(combo_parent_ids))
             )
-            for comp, child_name in c_res.all():
+            for comp, child_name, child_stock in c_res.all():
                 combo_map.setdefault(comp.parent_id, []).append({
                     "product_id": comp.child_id,
                     "product_name": child_name or "Componente",
-                    "quantity": float(comp.quantity_required or 1.0)
+                    "quantity": float(comp.quantity_required or 1.0),
+                    "child_stock": float(child_stock or 0.0)
                 })
 
         output = []
         for p in db_prods:
+            c_items = combo_map.get(p.id, [])
+            if p.product_type == "virtual":
+                if c_items:
+                    effective_stock = min(
+                        int(float(it.get("child_stock", 0.0)) / max(1.0, float(it.get("quantity", 1.0))))
+                        for it in c_items
+                    )
+                else:
+                    effective_stock = 0.0
+            else:
+                effective_stock = float(p.current_stock or 0.0)
+
             item = {
                 "id": p.id,
                 "product_id": p.id,
@@ -3619,11 +3632,11 @@ async def list_products(
                 "product_type": p.product_type or "physical",
                 "tax_type": p.tax_type or "vat",
                 "unit_measure": p.unit_measure or "UND",
-                "current_stock": float(p.current_stock or 0.0),
+                "current_stock": float(effective_stock),
                 "min_stock_alert": float(p.min_stock_alert or 5.0),
                 "image_url": p.image_url,
                 "is_active": p.is_active,
-                "combo_items": combo_map.get(p.id, []),
+                "combo_items": c_items,
                 "branch_id": branch_id or "branch-1",
                 "branch_name": "Sucursal Principal" if (branch_id or "branch-1") == "branch-1" else "Sucursal Norte",
                 "created_at": p.created_at.isoformat() if p.created_at else None
@@ -4582,13 +4595,20 @@ async def create_purchase(
             "lot_number": it.lot_number
         })
 
-        # Actualizar costo base en ProductModel si existe
+        # Actualizar stock y costo promedio ponderado en ProductModel
         try:
             p_chk = await db.execute(select(ProductModel).where(ProductModel.id == it.product_id))
             prod_row = p_chk.scalar_one_or_none()
             if prod_row:
-                if u_cost > 0:
-                    prod_row.cost_price = u_cost
+                old_stock = float(prod_row.current_stock or 0.0)
+                new_qty = float(it.quantity)
+                tot_stock = old_stock + new_qty
+                if tot_stock > 0 and u_cost > 0:
+                    old_cost = float(prod_row.cost_price or 0.0)
+                    prod_row.cost_price = round(((old_stock * old_cost) + (new_qty * u_cost)) / tot_stock, 4)
+                prod_row.current_stock = tot_stock
+                prod_row.cached_stock_quantity = tot_stock
+                prod_row.version = (prod_row.version or 1) + 1
                 prod_row.updated_at = now_dt
 
                 # Kardex IN tipo PURCHASE
@@ -4601,11 +4621,42 @@ async def create_purchase(
                     tx_type="IN",
                     reason="PURCHASE",
                     quantity=it.quantity,
+                    unit_cost_usd=u_cost,
+                    total_cost_usd=t_cost,
                     reference_id=pur_id,
                     created_at=now_dt
                 ))
-        except Exception:
-            pass
+
+                # Si el producto comprado es un combo virtual, sumar existencias a sus componentes físicos
+                if prod_row.product_type == "virtual":
+                    comp_res = await db.execute(
+                        select(ProductCompositionModel).where(ProductCompositionModel.parent_id == prod_row.id)
+                    )
+                    for comp in comp_res.scalars().all():
+                        c_chk = await db.execute(select(ProductModel).where(ProductModel.id == comp.child_id))
+                        child_p = c_chk.scalar_one_or_none()
+                        if child_p:
+                            added_qty = float(comp.quantity_required or 1.0) * float(it.quantity)
+                            child_p.current_stock = float(child_p.current_stock or 0.0) + added_qty
+                            child_p.cached_stock_quantity = child_p.current_stock
+                            child_p.version = (child_p.version or 1) + 1
+                            child_p.updated_at = now_dt
+                            db.add(InventoryTransactionModel(
+                                id=f"kdx-{uuid.uuid4().hex[:10]}",
+                                business_id=biz_id,
+                                branch_id=branch_id,
+                                user_id=usr_id,
+                                product_id=child_p.id,
+                                tx_type="IN",
+                                reason="COMBO_PACK",
+                                quantity=added_qty,
+                                unit_cost_usd=float(child_p.cost_price or 0.0),
+                                total_cost_usd=float(child_p.cost_price or 0.0) * added_qty,
+                                reference_id=pur_id,
+                                created_at=now_dt
+                            ))
+        except Exception as e:
+            logger.error(f"[PURCHASE] Error updating product stock: {e}")
 
         # Actualizar stock en memoria
         for p_mem in inventory_db:
@@ -8236,22 +8287,60 @@ async def create_sale_transaction(
         )
         db.add(sale_item)
 
-        # Kardex de Inventario (OUT tipo SALE) solo si el producto existe en PostgreSQL
-        p_chk = await db.execute(select(ProductModel.id).where(ProductModel.id == it.product_id))
-        if p_chk.scalar_one_or_none():
-            tx_kardex = InventoryTransactionModel(
-                id=f"kdx-{uuid.uuid4().hex[:10]}",
-                business_id=biz_id,
-                branch_id=branch_id,
-                user_id=usr_id,
-                product_id=it.product_id,
-                tx_type="OUT",
-                reason="SALE",
-                quantity=it.quantity,
-                reference_id=sale_id,
-                created_at=now_dt
-            )
-            db.add(tx_kardex)
+        # Descuento en inventario PostgreSQL y Kardex
+        p_chk = await db.execute(select(ProductModel).where(ProductModel.id == it.product_id))
+        prod_model = p_chk.scalar_one_or_none()
+        if prod_model:
+            # Si el producto vendido es un combo virtual, descontar componentes de su receta
+            if prod_model.product_type == "virtual":
+                comp_res = await db.execute(
+                    select(ProductCompositionModel).where(ProductCompositionModel.parent_id == prod_model.id)
+                )
+                for comp in comp_res.scalars().all():
+                    c_chk = await db.execute(select(ProductModel).where(ProductModel.id == comp.child_id))
+                    child_p = c_chk.scalar_one_or_none()
+                    if child_p:
+                        deduct_qty = float(comp.quantity_required or 1.0) * float(it.quantity)
+                        child_p.current_stock = max(0.0, float(child_p.current_stock or 0.0) - deduct_qty)
+                        child_p.cached_stock_quantity = child_p.current_stock
+                        child_p.version = (child_p.version or 1) + 1
+                        child_p.updated_at = now_dt
+
+                        db.add(InventoryTransactionModel(
+                            id=f"kdx-{uuid.uuid4().hex[:10]}",
+                            business_id=biz_id,
+                            branch_id=branch_id,
+                            user_id=usr_id,
+                            product_id=child_p.id,
+                            tx_type="OUT",
+                            reason="COMBO_PACK",
+                            quantity=deduct_qty,
+                            unit_cost_usd=float(child_p.cost_price or 0.0),
+                            total_cost_usd=float(child_p.cost_price or 0.0) * deduct_qty,
+                            reference_id=sale_id,
+                            created_at=now_dt
+                        ))
+            else:
+                new_stk = max(0.0, float(prod_model.current_stock or 0.0) - float(it.quantity))
+                prod_model.current_stock = new_stk
+                prod_model.cached_stock_quantity = new_stk
+                prod_model.version = (prod_model.version or 1) + 1
+                prod_model.updated_at = now_dt
+
+                db.add(InventoryTransactionModel(
+                    id=f"kdx-{uuid.uuid4().hex[:10]}",
+                    business_id=biz_id,
+                    branch_id=branch_id,
+                    user_id=usr_id,
+                    product_id=it.product_id,
+                    tx_type="OUT",
+                    reason="SALE",
+                    quantity=it.quantity,
+                    unit_cost_usd=float(prod_model.cost_price or 0.0),
+                    total_cost_usd=float(prod_model.cost_price or 0.0) * float(it.quantity),
+                    reference_id=sale_id,
+                    created_at=now_dt
+                ))
 
         # Descuento en inventario memoria
         for p_mem in inventory_db:
