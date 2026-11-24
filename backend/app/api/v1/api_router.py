@@ -5946,6 +5946,182 @@ async def pos_sync_bootstrap(
     }
 
 
+@api_router.get("/pos/sync/delta")
+async def pos_sync_delta(
+    since: Optional[str] = Query(None),
+    branch_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    x_device_token: Optional[str] = Header(None),
+    x_business_id: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Sincronización incremental (PULL-DELTA) para terminales Xion POS:
+    - Descarga clientes, productos, proveedores y tasa de cambio modificados desde `since`.
+    """
+    verify_system_operational()
+
+    token_str = x_device_token or authorization
+    claims = {}
+    if token_str:
+        clean_tok = token_str.replace("Bearer ", "").strip()
+        claims = decode_access_token(clean_tok) or {}
+
+    resolved_biz_id = x_business_id or claims.get("business_id")
+    if not resolved_biz_id:
+        biz_lookup = await db.execute(
+            select(BusinessModel)
+            .where(~BusinessModel.tax_id.like("J-TMP-%"), ~BusinessModel.tax_id.like("TMP-%"))
+            .order_by(BusinessModel.created_at.desc())
+            .limit(1)
+        )
+        biz_first = biz_lookup.scalar_one_or_none()
+        if biz_first:
+            resolved_biz_id = biz_first.id
+        else:
+            resolved_biz_id = "biz-25735853bd36"
+
+    # Tasa
+    store_rate = 36.50
+    try:
+        bs_res = await db.execute(select(SystemSettingsModel).where(SystemSettingsModel.business_id == resolved_biz_id))
+        bs_obj = bs_res.scalar_one_or_none()
+        if bs_obj and bs_obj.current_exchange_rate_bs:
+            store_rate = float(bs_obj.current_exchange_rate_bs)
+        else:
+            store_rate = float(global_settings.get("current_exchange_rate_bs", 36.50))
+    except Exception:
+        store_rate = float(global_settings.get("current_exchange_rate_bs", 36.50))
+
+    since_dt = None
+    if since:
+        try:
+            clean_since = since.replace("Z", "+00:00")
+            since_dt = datetime.fromisoformat(clean_since)
+            if since_dt.tzinfo is not None:
+                since_dt = since_dt.replace(tzinfo=None)
+        except Exception:
+            since_dt = None
+
+    # Clientes
+    delta_clients = []
+    try:
+        stmt_c = select(ClientModel).where(ClientModel.business_id == resolved_biz_id)
+        if since_dt:
+            stmt_c = stmt_c.where(
+                or_(
+                    ClientModel.updated_at >= since_dt,
+                    ClientModel.created_at >= since_dt
+                )
+            )
+        res_c = await db.execute(stmt_c)
+        for c in res_c.scalars().all():
+            delta_clients.append({
+                "id": c.id,
+                "name": c.name,
+                "email": c.email,
+                "phone": c.phone,
+                "address": c.address,
+                "identification_type": c.identification_type,
+                "identification_number": c.identification_number,
+                "credit_limit": float(c.credit_limit_usd or 0.0),
+                "credit_limit_usd": float(c.credit_limit_usd or 0.0),
+                "current_debt": float(c.current_debt or 0.0),
+                "is_active": c.is_active and (c.deleted_at is None),
+                "deleted_at": c.deleted_at.isoformat() if c.deleted_at else None,
+            })
+    except Exception as e:
+        logger.error(f"[DELTA] Error consultando clientes: {e}")
+
+    if not delta_clients and clients_memory_db:
+        delta_clients = [
+            {
+                "id": c["id"],
+                "name": c["name"],
+                "email": c.get("email"),
+                "phone": c.get("phone"),
+                "address": c.get("address"),
+                "identification_type": c.get("identification_type", "CI"),
+                "identification_number": c["identification_number"],
+                "credit_limit": float(c.get("credit_limit_usd", c.get("credit_limit", 0.0))),
+                "credit_limit_usd": float(c.get("credit_limit_usd", c.get("credit_limit", 0.0))),
+                "current_debt": float(c.get("current_debt", 0.0)),
+                "is_active": c.get("is_active", True)
+            }
+            for c in clients_memory_db
+            if c.get("business_id") == resolved_biz_id
+        ]
+
+    # Productos
+    delta_products = []
+    try:
+        stmt_p = select(ProductModel).where(ProductModel.business_id == resolved_biz_id)
+        if since_dt:
+            stmt_p = stmt_p.where(
+                or_(
+                    ProductModel.updated_at >= since_dt,
+                    ProductModel.created_at >= since_dt
+                )
+            )
+        res_p = await db.execute(stmt_p)
+        for p in res_p.scalars().all():
+            delta_products.append({
+                "id": p.id,
+                "sku": p.sku,
+                "barcode": p.barcode,
+                "name": p.name,
+                "description": p.description,
+                "sale_price": float(p.sale_price or 0.0),
+                "cost_price": float(p.cost_price or 0.0),
+                "price_usd": float(p.sale_price or 0.0),
+                "cost_usd": float(p.cost_price or 0.0),
+                "current_stock": 0.0,
+                "is_active": p.is_active and (p.deleted_at is None),
+            })
+    except Exception as e:
+        logger.error(f"[DELTA] Error consultando productos: {e}")
+
+    # Proveedores
+    delta_suppliers = []
+    try:
+        stmt_s = select(SupplierModel).where(SupplierModel.business_id == resolved_biz_id)
+        if since_dt:
+            stmt_s = stmt_s.where(
+                or_(
+                    SupplierModel.updated_at >= since_dt,
+                    SupplierModel.created_at >= since_dt
+                )
+            )
+        res_s = await db.execute(stmt_s)
+        for s in res_s.scalars().all():
+            delta_suppliers.append({
+                "id": s.id,
+                "name": s.name,
+                "rif": s.rif,
+                "identification_number": s.rif,
+                "payment_terms": s.payment_terms,
+                "current_balance_usd": float(s.current_balance_usd or 0.0),
+                "is_active": s.is_active and (s.deleted_at is None)
+            })
+    except Exception as e:
+        logger.error(f"[DELTA] Error consultando proveedores: {e}")
+
+    return {
+        "status": "DELTA_SUCCESS",
+        "server_timestamp": datetime.utcnow().isoformat(),
+        "exchange_rate": {
+            "rate": store_rate,
+            "currency": "VES",
+            "base_currency": "USD",
+            "symbol": "Bs.",
+            "updated_at": datetime.utcnow().isoformat()
+        },
+        "products_updated": delta_products,
+        "suppliers": delta_suppliers,
+        "clients": delta_clients,
+    }
+
+
 @api_router.post("/pos/sync/push")
 @api_router.post("/sync/pos-push")
 async def pos_push_sync(
@@ -5995,6 +6171,9 @@ async def pos_push_sync(
 
             credit_lim = float(c.get("credit_limit_usd") or c.get("credit_limit") or 0.0)
             c_debt = float(c.get("current_debt") or 0.0)
+            is_active_val = c.get("is_active", True)
+            if c.get("deleted_at") or not is_active_val:
+                is_active_val = False
 
             if cli:
                 cli.name = c.get("name") or cli.name
@@ -6003,7 +6182,11 @@ async def pos_push_sync(
                 cli.address = c.get("address") or cli.address
                 cli.credit_limit_usd = credit_lim
                 cli.current_debt = c_debt
-                cli.is_active = c.get("is_active", True)
+                cli.is_active = is_active_val
+                if c.get("deleted_at") or not is_active_val:
+                    cli.deleted_at = datetime.utcnow()
+                else:
+                    cli.deleted_at = None
                 cli.updated_at = datetime.utcnow()
             else:
                 cli = ClientModel(
@@ -6017,7 +6200,8 @@ async def pos_push_sync(
                     identification_number=c.get("identification_number") or "00000000",
                     credit_limit_usd=credit_lim,
                     current_debt=c_debt,
-                    is_active=c.get("is_active", True),
+                    is_active=is_active_val,
+                    deleted_at=datetime.utcnow() if not is_active_val else None,
                     version=1,
                     is_synced=True,
                     created_at=datetime.utcnow(),
@@ -6027,9 +6211,9 @@ async def pos_push_sync(
 
             existing_mem = next((mc for mc in clients_memory_db if mc.get("id") == cid or mc.get("identification_number") == c.get("identification_number")), None)
             if existing_mem:
-                existing_mem.update({**c, "id": cid, "business_id": biz_id})
+                existing_mem.update({**c, "id": cid, "business_id": biz_id, "is_active": is_active_val})
             else:
-                clients_memory_db.insert(0, {**c, "id": cid, "business_id": biz_id})
+                clients_memory_db.insert(0, {**c, "id": cid, "business_id": biz_id, "is_active": is_active_val})
 
             synced_client_uuids.append(cid)
         except Exception as c_err:
