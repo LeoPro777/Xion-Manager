@@ -5,6 +5,9 @@ from collections import defaultdict
 import time
 import json
 import uuid
+import logging
+
+logger = logging.getLogger("xion_manager.pos_sync")
 from app.core.config import settings
 from app.schemas.schemas import (
     AccountStatusResponse, BranchCreate, BranchUpdate, BranchResponse,
@@ -3223,11 +3226,61 @@ async def update_combo_components(combo_id: str, components: List[dict]):
 
 @api_router.get("/inventory")
 @api_router.get("/inventory/products")
-async def list_products(branch_id: Optional[str] = None):
+async def list_products(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
     verify_system_operational()
+    try:
+        stmt = select(ProductModel).where(ProductModel.is_active == True)
+        if search:
+            s_term = f"%{search.lower()}%"
+            stmt = stmt.where(or_(
+                func.lower(ProductModel.name).like(s_term),
+                func.lower(ProductModel.sku).like(s_term),
+                func.lower(ProductModel.barcode).like(s_term)
+            ))
+        res = await db.execute(stmt)
+        db_prods = res.scalars().all()
+        for p in db_prods:
+            existing = next((ip for ip in inventory_db if ip.get("id") == p.id or ip.get("sku") == p.sku), None)
+            if existing:
+                existing["name"] = p.name
+                existing["sale_price"] = float(p.sale_price or 0.0)
+                existing["cost_price"] = float(p.cost_price or 0.0)
+            else:
+                inventory_db.append({
+                    "id": p.id,
+                    "product_id": p.id,
+                    "sku": p.sku,
+                    "barcode": p.barcode,
+                    "name": p.name,
+                    "description": p.description or "",
+                    "category": p.category or "General",
+                    "cost_price": float(p.cost_price or 0.0),
+                    "sale_price": float(p.sale_price or 0.0),
+                    "wholesale_price": float(p.wholesale_price or 0.0),
+                    "package_quantity": p.package_quantity or 1,
+                    "product_type": p.product_type or "physical",
+                    "tax_type": p.tax_type or "vat",
+                    "unit_measure": p.unit_measure or "UND",
+                    "min_stock_alert": float(p.min_stock_alert or 5.0),
+                    "current_stock": 0.0,
+                    "image_url": p.image_url,
+                    "is_active": p.is_active,
+                    "created_at": p.created_at.isoformat() if p.created_at else None
+                })
+    except Exception as e:
+        logger.debug(f"[INVENTORY] Error loading products from DB: {e}")
+
+    items = inventory_db
     if branch_id:
-        return [p for p in inventory_db if p.get("branch_id") == branch_id or not p.get("branch_id")]
-    return inventory_db
+        items = [p for p in items if p.get("branch_id") == branch_id or not p.get("branch_id")]
+    if search:
+        s_low = search.lower()
+        items = [p for p in items if s_low in p.get("name", "").lower() or s_low in p.get("sku", "").lower() or s_low in str(p.get("barcode", "")).lower()]
+    return items
 
 @api_router.get("/inventory/{branch_id}")
 async def get_branch_inventory(branch_id: str):
@@ -5902,34 +5955,237 @@ async def pos_push_sync(
 ):
     """
     Sincronización bidireccional offline-first desde Xion POS:
-    - Recibe lote de ventas realizadas en la terminal POS.
-    - Idempotencia: previene duplicados por sale_uuid.
-    - Descuenta existencias en inventario en tiempo real.
-    - Acumula métricas de ventas y actualiza última conexión de la caja.
+    - Ingesta atómica de clientes creados offline.
+    - Ingesta de productos y catálogo registrados en terminal.
+    - Ingesta de compras y movimientos de inventario.
+    - Ingesta de ventas y desglose de pagos multi-moneda.
+    - Idempotencia: previene duplicados por sale_uuid y confirma synced_uuids.
     """
     verify_system_operational()
+    biz_id = payload.get("business_id") or "biz-25735853bd36"
     cr_id = payload.get("cash_register_id")
-    sales = payload.get("sales", [])
-    turn_data = payload.get("turn_data") or {}
     now_iso = datetime.utcnow().isoformat()
 
+    # Resolver branch_id real en la base de datos
+    branch_id = payload.get("branch_id")
+    if not branch_id or branch_id == "br-main":
+        res_br = await db.execute(select(BranchModel.id).where(BranchModel.business_id == biz_id).limit(1))
+        real_br = res_br.scalar_one_or_none()
+        branch_id = real_br or "br-e5379c25"
+
+    synced_client_uuids: List[str] = []
+    synced_product_uuids: List[str] = []
+    synced_sale_uuids: List[str] = []
+    synced_purchase_uuids: List[str] = []
+    synced_inventory_uuids: List[str] = []
+
+    # 1. Ingesta de Clientes creados offline en el POS
+    clients = payload.get("clients", [])
+    for c in clients:
+        cid = c.get("id") or str(uuid.uuid4())
+        try:
+            res_c = await db.execute(select(ClientModel).where(ClientModel.id == cid))
+            cli = res_c.scalar_one_or_none()
+            if not cli and c.get("identification_number"):
+                res_c = await db.execute(select(ClientModel).where(
+                    ClientModel.business_id == biz_id,
+                    ClientModel.identification_number == c.get("identification_number")
+                ))
+                cli = res_c.scalar_one_or_none()
+
+            credit_lim = float(c.get("credit_limit_usd") or c.get("credit_limit") or 0.0)
+            c_debt = float(c.get("current_debt") or 0.0)
+
+            if cli:
+                cli.name = c.get("name") or cli.name
+                cli.email = c.get("email") or cli.email
+                cli.phone = c.get("phone") or cli.phone
+                cli.address = c.get("address") or cli.address
+                cli.credit_limit_usd = credit_lim
+                cli.current_debt = c_debt
+                cli.is_active = c.get("is_active", True)
+                cli.updated_at = datetime.utcnow()
+            else:
+                cli = ClientModel(
+                    id=cid,
+                    business_id=biz_id,
+                    name=c.get("name") or "Cliente",
+                    email=c.get("email"),
+                    phone=c.get("phone"),
+                    address=c.get("address"),
+                    identification_type=c.get("identification_type") or "CI",
+                    identification_number=c.get("identification_number") or "00000000",
+                    credit_limit_usd=credit_lim,
+                    current_debt=c_debt,
+                    is_active=c.get("is_active", True),
+                    version=1,
+                    is_synced=True,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                db.add(cli)
+
+            existing_mem = next((mc for mc in clients_memory_db if mc.get("id") == cid or mc.get("identification_number") == c.get("identification_number")), None)
+            if existing_mem:
+                existing_mem.update({**c, "id": cid, "business_id": biz_id})
+            else:
+                clients_memory_db.insert(0, {**c, "id": cid, "business_id": biz_id})
+
+            synced_client_uuids.append(cid)
+        except Exception as c_err:
+            logger.error(f"[PUSH] Error ingesta cliente {cid}: {c_err}")
+
+    if clients:
+        try:
+            await db.commit()
+        except Exception as c_commit_err:
+            logger.error(f"[PUSH] Error commit clientes: {c_commit_err}")
+            await db.rollback()
+
+    # 2. Ingesta de Productos creados en POS
+    products = payload.get("products", [])
+    for p in products:
+        pid = p.get("id") or str(uuid.uuid4())
+        price_val = float(p.get("sale_price") or p.get("price_usd") or 0.0)
+        cost_val = float(p.get("cost_price") or p.get("cost_usd") or 0.0)
+        stock_val = float(p.get("current_stock") or p.get("cached_stock_quantity") or 0.0)
+        try:
+            res_p = await db.execute(select(ProductModel).where(ProductModel.id == pid))
+            prod = res_p.scalar_one_or_none()
+            if not prod and p.get("sku"):
+                res_p = await db.execute(select(ProductModel).where(
+                    ProductModel.business_id == biz_id,
+                    ProductModel.sku == p.get("sku")
+                ))
+                prod = res_p.scalar_one_or_none()
+
+            if prod:
+                prod.name = p.get("name") or prod.name
+                prod.description = p.get("description") or prod.description
+                prod.cost_price = cost_val if cost_val > 0 else prod.cost_price
+                prod.sale_price = price_val if price_val > 0 else prod.sale_price
+                if p.get("barcode"):
+                    prod.barcode = p.get("barcode")
+                prod.updated_at = datetime.utcnow()
+            else:
+                prod = ProductModel(
+                    id=pid,
+                    business_id=biz_id,
+                    category_id=p.get("category_id"),
+                    category=p.get("category") or "General",
+                    barcode=p.get("barcode"),
+                    sku=p.get("sku") or pid,
+                    name=p.get("name") or "Producto",
+                    description=p.get("description"),
+                    cost_price=cost_val,
+                    sale_price=price_val,
+                    wholesale_price=float(p.get("wholesale_price_usd") or p.get("wholesale_price") or 0.0),
+                    package_quantity=int(p.get("package_quantity") or 1),
+                    product_type=str(p.get("product_type") or "physical"),
+                    tax_type=str(p.get("tax_type") or "vat"),
+                    unit_measure=str(p.get("unit_measure") or "UND"),
+                    min_stock_alert=float(p.get("min_stock_alert") or 5.0),
+                    image_url=p.get("image_url"),
+                    is_active=p.get("is_active", True),
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                db.add(prod)
+
+            existing_inv = next((ip for ip in inventory_db if ip.get("id") == pid or ip.get("sku") == p.get("sku")), None)
+            if existing_inv:
+                existing_inv["name"] = p.get("name") or existing_inv.get("name")
+                existing_inv["sale_price"] = price_val
+                existing_inv["cost_price"] = cost_val
+                existing_inv["current_stock"] = stock_val
+            else:
+                inventory_db.append({
+                    "id": pid,
+                    "sku": p.get("sku") or pid,
+                    "name": p.get("name") or "Producto",
+                    "sale_price": price_val,
+                    "cost_price": cost_val,
+                    "current_stock": stock_val,
+                    "category": p.get("category") or "General",
+                    "tax_rate": 16.0,
+                    "is_active": True,
+                })
+            synced_product_uuids.append(pid)
+        except Exception as p_err:
+            logger.error(f"[PUSH] Error ingesta producto {pid}: {p_err}")
+
+    if products:
+        try:
+            await db.commit()
+        except Exception as p_commit_err:
+            logger.error(f"[PUSH] Error commit productos: {p_commit_err}")
+            await db.rollback()
+
+    # 3. Ingesta de Compras
+    purchases = payload.get("purchases", [])
+    for pur in purchases:
+        pur_id = pur.get("id") or str(uuid.uuid4())
+        try:
+            res_pur = await db.execute(select(PurchaseModel).where(PurchaseModel.id == pur_id))
+            if not res_pur.scalar_one_or_none():
+                db_pur = PurchaseModel(
+                    id=pur_id,
+                    business_id=biz_id,
+                    branch_id=branch_id,
+                    supplier_id=pur.get("supplier_id"),
+                    invoice_number=pur.get("invoice_number"),
+                    total_amount_usd=float(pur.get("total_amount_usd") or 0.0),
+                    total_amount_bs=float(pur.get("total_amount_bs") or 0.0),
+                    exchange_rate=float(pur.get("exchange_rate") or 1.0),
+                    payment_status=pur.get("payment_status") or "paid",
+                    notes=pur.get("notes"),
+                    is_synced=True,
+                    created_at=datetime.utcnow()
+                )
+                db.add(db_pur)
+                await db.commit()
+            synced_purchase_uuids.append(pur_id)
+        except Exception as pur_err:
+            logger.error(f"[PUSH] Error ingesta compra {pur_id}: {pur_err}")
+
+    # 4. Ingesta de Movimientos de Inventario (Mermas / Ajustes)
+    movements = payload.get("inventory_movements", [])
+    for inv in movements:
+        inv_id = inv.get("id") or str(uuid.uuid4())
+        try:
+            res_inv = await db.execute(select(InventoryTransactionModel).where(InventoryTransactionModel.id == inv_id))
+            if not res_inv.scalar_one_or_none():
+                db_inv = InventoryTransactionModel(
+                    id=inv_id,
+                    business_id=biz_id,
+                    branch_id=branch_id,
+                    product_id=inv.get("product_id") or "prod-unk",
+                    transaction_type="OUT" if "OUT" in str(inv.get("type", "")).upper() else "IN",
+                    quantity=float(inv.get("quantity") or 0.0),
+                    unit_cost_usd=float(inv.get("unit_cost_usd") or 0.0),
+                    reference_id=inv.get("reason"),
+                    notes=inv.get("notes"),
+                    is_synced=True,
+                    created_at=datetime.utcnow()
+                )
+                db.add(db_inv)
+                await db.commit()
+            synced_inventory_uuids.append(inv_id)
+        except Exception as inv_err:
+            logger.error(f"[PUSH] Error ingesta inventario {inv_id}: {inv_err}")
+
+    # 5. Ingesta de Ventas
+    sales = payload.get("sales", [])
+    turn_data = payload.get("turn_data") or {}
     newly_synced_count = 0
     total_sales_added = 0.0
 
     for s in sales:
         sale_uuid = str(s.get("sale_uuid") or s.get("id") or s.get("invoice_number") or uuid.uuid4())
-        if sale_uuid in pos_processed_sale_uuids:
-            continue
-
-        pos_processed_sale_uuids.add(sale_uuid)
-        pos_synced_sales_db.append(s)
-        newly_synced_count += 1
-
         sale_total = float(s.get("total_usd") or s.get("amount") or s.get("total") or 0.0)
-        total_sales_added += sale_total
-
-        # Descontar stock de productos vendidos en el inventario
         items = s.get("items", [])
+
+        # Descontar stock en memoria
         for it in items:
             p_id = it.get("product_id") or it.get("id")
             p_qty = float(it.get("quantity") or it.get("qty") or 1.0)
@@ -5938,104 +6194,123 @@ async def pos_push_sync(
                     prod["current_stock"] = max(0.0, float(prod.get("current_stock", 0.0)) - p_qty)
                     break
 
-        # Persistir venta en PostgreSQL (SaleModel, SaleItemModel, SalePaymentModel)
-        try:
-            db_sale = SaleModel(
-                id=sale_uuid,
-                business_id=s.get("business_id") or payload.get("business_id") or "biz-25735853bd36",
-                branch_id=s.get("branch_id") or payload.get("branch_id") or "br-main",
-                cash_session_id=s.get("cash_session_id") or payload.get("pos_session_uuid"),
-                cash_register_id=cr_id,
-                device_id=s.get("device_id") or payload.get("device_id"),
-                client_id=s.get("client_id"),
-                client_name=s.get("client_name") or "Cliente Final",
-                invoice_number=s.get("invoice_number") or sale_uuid[:8],
-                subtotal_usd=float(s.get("subtotal_usd") or sale_total),
-                tax_amount_usd=float(s.get("tax_amount_usd") or 0.0),
-                igtf_amount_usd=float(s.get("igtf_amount_usd") or 0.0),
-                total_amount_usd=sale_total,
-                total_amount_bs=float(s.get("total_bs") or (sale_total * float(s.get("exchange_rate") or 1.0))),
-                exchange_rate=float(s.get("exchange_rate") or 1.0),
-                status=s.get("status") or "completed",
-                version=1,
-                is_synced=True,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
-            )
-            db.add(db_sale)
+        # Validar existencia de cliente en PostgreSQL para evitar Foreign Key Constraint Violation
+        valid_client_id = None
+        target_cid = s.get("client_id")
+        if target_cid:
+            chk_c = await db.execute(select(ClientModel.id).where(ClientModel.id == target_cid))
+            if chk_c.scalar_one_or_none():
+                valid_client_id = target_cid
 
-            for it in items:
-                db.add(SaleItemModel(
-                    id=f"si-{uuid.uuid4().hex[:10]}",
-                    sale_id=sale_uuid,
-                    product_id=it.get("product_id") or it.get("id") or "prod-unk",
-                    product_name=it.get("product_name") or it.get("name") or "Producto POS",
-                    quantity=float(it.get("quantity") or it.get("qty") or 1.0),
-                    unit_price_usd=float(it.get("unit_price_usd") or it.get("price_usd") or 0.0),
-                    tax_rate=float(it.get("tax_rate") or 16.0),
-                    tax_amount_usd=float(it.get("tax_amount_usd") or 0.0),
-                    total_price_usd=float(it.get("total_price_usd") or 0.0)
-                ))
+        # Verificar si la venta ya existe en DB
+        res_existing_sale = await db.execute(select(SaleModel).where(SaleModel.id == sale_uuid))
+        existing_sale = res_existing_sale.scalar_one_or_none()
 
-            # Métodos de pago
-            s_payments = s.get("payments", [])
-            if not s_payments and s.get("payment_method"):
-                s_payments = [{
-                    "payment_method_id": s.get("payment_method"),
-                    "payment_method_label": s.get("payment_method_label") or s.get("payment_method"),
-                    "currency": s.get("currency") or "USD",
-                    "amount_tendered": sale_total,
-                    "amount_usd": sale_total,
-                    "reference_code": s.get("reference") or s.get("reference_code")
-                }]
+        if not existing_sale:
+            try:
+                db_sale = SaleModel(
+                    id=sale_uuid,
+                    business_id=s.get("business_id") or biz_id,
+                    branch_id=s.get("branch_id") or branch_id,
+                    cash_session_id=s.get("cash_session_id") or payload.get("pos_session_uuid"),
+                    cash_register_id=cr_id,
+                    device_id=s.get("device_id") or payload.get("device_id"),
+                    client_id=valid_client_id,
+                    client_name=s.get("client_name") or "Cliente Final",
+                    invoice_number=s.get("invoice_number") or f"FAC-{sale_uuid[:8].upper()}",
+                    subtotal_usd=float(s.get("subtotal_usd") or sale_total),
+                    tax_amount_usd=float(s.get("tax_amount_usd") or 0.0),
+                    igtf_amount_usd=float(s.get("igtf_amount_usd") or 0.0),
+                    total_amount_usd=sale_total,
+                    total_amount_bs=float(s.get("total_bs") or (sale_total * float(s.get("exchange_rate") or 1.0))),
+                    exchange_rate=float(s.get("exchange_rate") or 1.0),
+                    status=s.get("status") or "completed",
+                    version=1,
+                    is_synced=True,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                db.add(db_sale)
 
-            for pm in s_payments:
-                db.add(SalePaymentModel(
-                    id=f"sp-{uuid.uuid4().hex[:10]}",
-                    sale_id=sale_uuid,
-                    payment_method_id=str(pm.get("payment_method_id") or pm.get("method") or "cash"),
-                    payment_method_label=str(pm.get("payment_method_label") or pm.get("label") or "Efectivo"),
-                    currency=str(pm.get("currency") or "USD"),
-                    exchange_rate=float(pm.get("exchange_rate") or s.get("exchange_rate") or 1.0),
-                    amount_tendered=float(pm.get("amount_tendered") or pm.get("amount") or sale_total),
-                    amount_usd=float(pm.get("amount_usd") or pm.get("amount") or sale_total),
-                    reference_code=pm.get("reference_code") or pm.get("reference"),
-                    created_at=datetime.utcnow()
-                ))
+                for it in items:
+                    db.add(SaleItemModel(
+                        id=f"si-{uuid.uuid4().hex[:10]}",
+                        sale_id=sale_uuid,
+                        product_id=it.get("product_id") or it.get("id") or "prod-unk",
+                        product_name=it.get("product_name") or it.get("name") or "Producto POS",
+                        quantity=float(it.get("quantity") or it.get("qty") or 1.0),
+                        unit_price_usd=float(it.get("unit_price_usd") or it.get("price_usd") or 0.0),
+                        tax_rate=float(it.get("tax_rate") or 16.0),
+                        tax_amount_usd=float(it.get("tax_amount_usd") or 0.0),
+                        total_price_usd=float(it.get("total_price_usd") or 0.0)
+                    ))
 
-            # Registrar también en sales_memory_db para consistencia
+                s_payments = s.get("payments", [])
+                if not s_payments and s.get("payment_method"):
+                    s_payments = [{
+                        "payment_method_id": s.get("payment_method"),
+                        "payment_method_label": s.get("payment_method_label") or s.get("payment_method"),
+                        "currency": s.get("currency") or "USD",
+                        "amount_tendered": sale_total,
+                        "amount_usd": sale_total,
+                        "reference_code": s.get("reference") or s.get("reference_code")
+                    }]
+
+                for pm in s_payments:
+                    db.add(SalePaymentModel(
+                        id=f"sp-{uuid.uuid4().hex[:10]}",
+                        sale_id=sale_uuid,
+                        payment_method_id=str(pm.get("payment_method_id") or pm.get("payment_method_code") or pm.get("method") or "cash"),
+                        payment_method_label=str(pm.get("payment_method_label") or pm.get("label") or "Efectivo"),
+                        currency=str(pm.get("currency") or "USD"),
+                        exchange_rate=float(pm.get("exchange_rate") or s.get("exchange_rate") or 1.0),
+                        amount_tendered=float(pm.get("amount_tendered") or pm.get("amount_ves") or pm.get("amount") or sale_total),
+                        amount_usd=float(pm.get("amount_usd") or pm.get("amount_usd_equivalent") or pm.get("amount") or sale_total),
+                        reference_code=pm.get("reference_code") or pm.get("reference_number") or pm.get("reference"),
+                        created_at=datetime.utcnow()
+                    ))
+
+                await db.commit()
+                newly_synced_count += 1
+                total_sales_added += sale_total
+            except Exception as sale_err:
+                logger.error(f"[PUSH] Error persistiendo venta {sale_uuid}: {sale_err}", exc_info=True)
+                await db.rollback()
+
+        # Consistencia en memoria
+        mem_sale = next((ms for ms in sales_memory_db if ms["id"] == sale_uuid), None)
+        if not mem_sale:
             sales_memory_db.insert(0, {
                 "id": sale_uuid,
-                "business_id": s.get("business_id") or "biz-25735853bd36",
-                "branch_id": s.get("branch_id") or "br-main",
-                "client_id": s.get("client_id"),
+                "business_id": s.get("business_id") or biz_id,
+                "branch_id": s.get("branch_id") or branch_id,
+                "client_id": valid_client_id,
                 "client_name": s.get("client_name") or "Cliente Final",
-                "invoice_number": s.get("invoice_number") or sale_uuid[:8],
+                "invoice_number": s.get("invoice_number") or f"FAC-{sale_uuid[:8].upper()}",
                 "subtotal_usd": float(s.get("subtotal_usd") or sale_total),
                 "total_amount_usd": sale_total,
                 "total_amount_bs": float(s.get("total_bs") or (sale_total * float(s.get("exchange_rate") or 1.0))),
                 "exchange_rate": float(s.get("exchange_rate") or 1.0),
                 "status": "completed",
                 "items_count": len(items),
-                "payments": s_payments,
+                "payments": s.get("payments", []),
                 "created_at": datetime.utcnow().isoformat()
             })
-            await db.commit()
-        except Exception:
-            pass
 
-        # Sincronizar cuentas por cobrar si la venta fue a crédito para un cliente
-        client_id = s.get("client_id")
+        pos_processed_sale_uuids.add(sale_uuid)
+        synced_sale_uuids.append(sale_uuid)
+
+        # Sincronizar cuentas por cobrar si la venta fue a crédito
         is_credit = s.get("is_credit", False) or str(s.get("payment_method", "")).upper() in ("CREDIT", "CREDITO", "CREDIT_SALE")
         credit_amount = float(s.get("credit_amount_usd") or (sale_total if is_credit else 0.0))
-        if client_id and credit_amount > 0:
+        if valid_client_id and credit_amount > 0:
             try:
-                res_c = await db.execute(select(ClientModel).where(ClientModel.id == client_id, ClientModel.deleted_at == None))
+                res_c = await db.execute(select(ClientModel).where(ClientModel.id == valid_client_id, ClientModel.deleted_at == None))
                 target_client = res_c.scalar_one_or_none()
                 if target_client:
                     new_charge = ClientReceivablesLedgerModel(
                         id=f"cxc-{uuid.uuid4().hex[:10]}",
-                        client_id=client_id,
+                        client_id=valid_client_id,
                         sale_id=sale_uuid,
                         tx_type="CHARGE",
                         amount_usd=credit_amount,
@@ -6049,10 +6324,10 @@ async def pos_push_sync(
                     target_client.current_debt = float(target_client.current_debt or 0.0) + credit_amount
                     target_client.updated_at = datetime.utcnow()
                     await db.commit()
-            except Exception:
-                pass
+            except Exception as cxc_err:
+                logger.error(f"[PUSH] Error CxC venta {sale_uuid}: {cxc_err}")
 
-    # Actualizar caja registradora (ventas del día y pulso en línea)
+    # Actualizar caja registradora
     if cr_id:
         for cr in cash_registers_db:
             if cr.get("id") == cr_id:
@@ -6085,7 +6360,16 @@ async def pos_push_sync(
 
     return {
         "status": "SYNC_SUCCESS",
-        "synced_sales_count": len(sales),
+        "synced_uuids": {
+            "sales": synced_sale_uuids,
+            "clients": synced_client_uuids,
+            "products": synced_product_uuids,
+            "purchases": synced_purchase_uuids,
+            "inventory_movements": synced_inventory_uuids
+        },
+        "synced_sales_count": len(synced_sale_uuids),
+        "synced_clients_count": len(synced_client_uuids),
+        "synced_products_count": len(synced_product_uuids),
         "newly_processed_sales": newly_synced_count,
         "inventory_updated": True,
         "server_timestamp": datetime.utcnow()
