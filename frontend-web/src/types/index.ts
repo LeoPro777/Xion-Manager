@@ -235,6 +235,8 @@ export interface PurchaseItemDetail {
   product_sku: string;
   quantity: number;
   lot_number?: string;
+  lot_count?: number;
+  previous_cost_usd?: number;
   cost_usd: number;
   cost_bs: number;
   total_usd: number;
