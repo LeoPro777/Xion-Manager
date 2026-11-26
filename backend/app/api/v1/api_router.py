@@ -37,7 +37,9 @@ from app.services.image_service import (
     delete_product_images,
     save_and_process_receipt_image,
     delete_image_variants,
-    process_and_upload_image
+    process_and_upload_image,
+    extract_image_id,
+    resolve_variant_url
 )
 from app.services.storage_service import storage_service
 from app.services.xion_pay_service import XionPayService
@@ -3793,11 +3795,58 @@ async def create_product(
 @api_router.post("/inventory/products/image")
 async def upload_product_image_endpoint(
     file: UploadFile = File(...),
-    old_image_url: Optional[str] = Query(None)
+    old_image_url: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
 ):
     """Sube y optimiza la imagen de un producto en memoria a Supabase Storage."""
     verify_system_operational()
-    return await save_and_process_product_image(file, old_image_url)
+    biz_id = "default"
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+    return await save_and_process_product_image(file, old_image_url, tenant_id=biz_id)
+
+@api_router.post("/inventory/products/{product_id}/image")
+async def upload_product_image_by_id_endpoint(
+    product_id: str,
+    file: UploadFile = File(...),
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """Sube, optimiza a Supabase Storage y actualiza atómicamente la imagen del producto en base de datos."""
+    verify_system_operational()
+    biz_id = "biz-25735853bd36"
+    if authorization and authorization.startswith("Bearer "):
+        tok = decode_access_token(authorization.split(" ")[1])
+        if tok and tok.get("business_id"):
+            biz_id = tok.get("business_id")
+
+    stmt = select(ProductModel).where(
+        ProductModel.id == product_id,
+        ProductModel.business_id == biz_id,
+        ProductModel.deleted_at.is_(None)
+    )
+    res = await db.execute(stmt)
+    prod = res.scalar_one_or_none()
+    if not prod:
+        res2 = await db.execute(
+            select(ProductModel).where(
+                ProductModel.sku == product_id,
+                ProductModel.business_id == biz_id
+            )
+        )
+        prod = res2.scalar_one_or_none()
+
+    old_url = prod.image_url if prod else None
+    upload_res = await save_and_process_product_image(file, old_url, tenant_id=biz_id)
+
+    if prod:
+        prod.image_url = upload_res["image_url"]
+        await db.commit()
+        await db.refresh(prod)
+
+    return upload_res
 
 @api_router.put("/inventory/products/{product_id}")
 async def update_product(
@@ -6443,6 +6492,9 @@ async def pos_sync_bootstrap(
             "current_stock": 100.0,
             "min_stock_alert": float(p.min_stock_alert or 5.0),
             "image_url": p.image_url or "",
+            "image_id": extract_image_id(p.image_url) or "",
+            "thumb_url": resolve_variant_url(p.image_url, "thumb") or "",
+            "medium_url": resolve_variant_url(p.image_url, "medium") or "",
             "is_active": True
         })
 
@@ -6451,6 +6503,7 @@ async def pos_sync_bootstrap(
         for p in inventory_db:
             price_usd = float(p.get("sale_price") or 0.0)
             price_bs = round(price_usd * store_rate, 2)
+            img_u = p.get("image_url") or ""
             pos_products.append({
                 "id": p.get("id") or p.get("product_id"),
                 "product_id": p.get("product_id") or p.get("id"),
@@ -6466,7 +6519,10 @@ async def pos_sync_bootstrap(
                 "tax_rate": tax_rate if p.get("tax_type") in ("vat", "iva") else 0.0,
                 "unit_measure": p.get("unit_measure") or "UND",
                 "current_stock": float(p.get("current_stock") or 0.0),
-                "image_url": p.get("image_url") or "",
+                "image_url": img_u,
+                "image_id": extract_image_id(img_u) or "",
+                "thumb_url": resolve_variant_url(img_u, "thumb") or "",
+                "medium_url": resolve_variant_url(img_u, "medium") or "",
                 "is_active": True
             })
 
@@ -6731,6 +6787,10 @@ async def pos_sync_delta(
                 "price_usd": float(p.sale_price or 0.0),
                 "cost_usd": float(p.cost_price or 0.0),
                 "current_stock": 0.0,
+                "image_url": p.image_url or "",
+                "image_id": extract_image_id(p.image_url) or "",
+                "thumb_url": resolve_variant_url(p.image_url, "thumb") or "",
+                "medium_url": resolve_variant_url(p.image_url, "medium") or "",
                 "is_active": p.is_active and (p.deleted_at is None),
             })
     except Exception as e:

@@ -1,5 +1,6 @@
 import io
 import uuid
+import re
 import hashlib
 from typing import Optional, Dict, Any, List
 from PIL import Image, ImageOps
@@ -10,35 +11,33 @@ from app.core.config import settings
 
 VALID_MIME_TYPES = {
     "image/jpeg", 
-    "image/jpg", 
     "image/png", 
     "image/webp", 
     "image/bmp", 
-    "image/tiff",
-    "image/gif"
+    "image/tiff"
 }
 
 # Image variant specifications by context (max width, max height, quality)
 VARIANT_CONFIGS: Dict[str, Dict[str, Dict[str, Any]]] = {
     "products": {
-        "medium": {"size": (800, 800), "quality": 82},
-        "thumb": {"size": (250, 250), "quality": 78}
+        "medium": {"size": (500, 500), "quality": 80},
+        "thumb": {"size": (150, 150), "quality": 75}
     },
     "payment_methods": {
-        "medium": {"size": (500, 500), "quality": 85},
-        "thumb": {"size": (150, 150), "quality": 80}
+        "medium": {"size": (500, 500), "quality": 80},
+        "thumb": {"size": (150, 150), "quality": 75}
     },
     "receipts": {
-        "medium": {"size": (1600, 1600), "quality": 85},
+        "medium": {"size": (1200, 1200), "quality": 80},
         "thumb": {"size": (300, 300), "quality": 75}
     },
     "logos": {
-        "medium": {"size": (500, 500), "quality": 88},
-        "thumb": {"size": (120, 120), "quality": 82}
+        "medium": {"size": (500, 500), "quality": 85},
+        "thumb": {"size": (150, 150), "quality": 75}
     },
     "default": {
-        "medium": {"size": (1200, 1200), "quality": 82},
-        "thumb": {"size": (200, 200), "quality": 75}
+        "medium": {"size": (500, 500), "quality": 80},
+        "thumb": {"size": (150, 150), "quality": 75}
     }
 }
 
@@ -96,32 +95,35 @@ def process_image_to_variants(
     context: str = "products"
 ) -> Dict[str, bytes]:
     """
-    In-memory image processing:
-    - Auto-corrects EXIF orientation.
-    - Preserves alpha transparency (RGBA) if present, or converts to RGB.
-    - Proportionally scales and optimizes into WebP byte variants (medium, thumb).
+    Procesamiento multimedia en memoria para Supabase Storage:
+    - Normalización EXIF automática: ImageOps.exif_transpose()
+    - Composición sobre fondo blanco plano (#FFFFFF) para canales alfa (RGBA/P) con Image.alpha_composite()
+    - Recorte y centrado proporcional 1:1 con ImageOps.fit() y LANCZOS (sin deformar el producto)
+    - Compresión dual WebP (Medium 500x500 Q=80, Thumb 150x150 Q=75) con optimize=True
     """
     cfg = VARIANT_CONFIGS.get(context, VARIANT_CONFIGS["default"])
     processed_variants: Dict[str, bytes] = {}
 
     try:
         with Image.open(io.BytesIO(raw_bytes)) as base_img:
-            # Correct EXIF rotation (mobile phone camera shots)
+            # 1. Corrección de orientación EXIF (giroscopio móvil/cámara)
             corrected_img = ImageOps.exif_transpose(base_img)
 
-            # Preserve transparency if RGBA/palette transparency, else RGB
-            if corrected_img.mode in ("RGBA", "LA") or (corrected_img.mode == "P" and "transparency" in corrected_img.info):
-                normalized_img = corrected_img.convert("RGBA")
+            # 2. Composición sobre fondo blanco para transparencias PNG/Palette (RGBA / P)
+            if corrected_img.mode in ("RGBA", "LA") or (corrected_img.mode == "P" and "transparency" in corrected_img.info) or corrected_img.mode == "P":
+                corrected_img = corrected_img.convert("RGBA")
+                background = Image.new("RGBA", corrected_img.size, (255, 255, 255, 255))
+                normalized_img = Image.alpha_composite(background, corrected_img).convert("RGB")
             else:
                 normalized_img = corrected_img.convert("RGB")
 
+            # 3. Escalado proporcional 1:1 Centered Fit con ImageOps.fit y compresión WebP
             for variant_name, spec in cfg.items():
                 max_w, max_h = spec["size"]
                 quality = spec["quality"]
 
-                var_img = normalized_img.copy()
-                if var_img.width > max_w or var_img.height > max_h:
-                    var_img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+                # ImageOps.fit centra y recorta manteniendo relación de aspecto 1:1 sin deformar
+                var_img = ImageOps.fit(normalized_img, (max_w, max_h), method=Image.Resampling.LANCZOS)
 
                 out_buf = io.BytesIO()
                 var_img.save(
@@ -252,11 +254,49 @@ def delete_image_variants(image_key_or_url: Optional[str]) -> None:
 # Specialized Domain Helpers (Payment Methods, Products, Receipts, Logos)
 # --------------------------------------------------------------------------
 
+def extract_image_id(path_or_url: Optional[str]) -> Optional[str]:
+    """
+    Extrae el token único de 12 caracteres hex desde cualquier URL de Supabase,
+    ruta relativa o ID directo.
+    Ejemplo:
+      https://.../medium_a1b2c3d4e5f6.webp -> a1b2c3d4e5f6
+      products/biz-101/thumb_a1b2c3d4e5f6.webp -> a1b2c3d4e5f6
+      a1b2c3d4e5f6 -> a1b2c3d4e5f6
+    """
+    if not path_or_url:
+        return None
+    clean = path_or_url.strip()
+    match = re.search(r'(?:thumb_|medium_|receipt_)?([a-f0-9]{12})(?:\.webp)?', clean)
+    if match:
+        return match.group(1)
+    parts = clean.split('/')[-1].split('.')[0]
+    for prefix in ["thumb_", "medium_", "receipt_"]:
+        if parts.startswith(prefix):
+            parts = parts[len(prefix):]
+    return parts or clean
+
+
+def resolve_variant_url(url_or_id: Optional[str], variant: str = "medium") -> Optional[str]:
+    """
+    Intercambia de forma atómica la variante (medium <-> thumb) sobre URLs de Supabase Storage.
+    """
+    if not url_or_id:
+        return None
+    url = url_or_id.strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return url
+    if variant == "thumb" and "/medium_" in url:
+        return url.replace("/medium_", "/thumb_")
+    if variant == "medium" and "/thumb_" in url:
+        return url.replace("/thumb_", "/medium_")
+    return url
+
+
 async def save_and_process_payment_method_image(
     file: UploadFile,
     old_image_id: Optional[str] = None,
     tenant_id: str = "system"
-) -> str:
+) -> Dict[str, Any]:
     """Processes payment method logos to WebP and stores them in Supabase Storage."""
     res = await process_and_upload_image(
         file=file,
@@ -265,7 +305,15 @@ async def save_and_process_payment_method_image(
         is_public=True,
         old_file_key=old_image_id
     )
-    return res["url"]
+    return {
+        "image_id": res["file_id"],
+        "file_id": res["file_id"],
+        "url": res["url"],
+        "image_url": res["url"],
+        "thumb_url": res["thumb_url"],
+        "medium_url": res["url"],
+        "variants": res["variants"]
+    }
 
 
 def delete_payment_method_images(image_key_or_url: Optional[str]) -> None:
@@ -277,8 +325,8 @@ async def save_and_process_product_image(
     file: UploadFile,
     old_image_url: Optional[str] = None,
     tenant_id: str = "default"
-) -> Dict[str, str]:
-    """Processes product photos to WebP and stores them in Supabase Storage."""
+) -> Dict[str, Any]:
+    """Processes product photos to WebP (500x500 medium, 150x150 thumb) and stores them in Supabase Storage."""
     res = await process_and_upload_image(
         file=file,
         tenant_id=tenant_id,
@@ -287,9 +335,12 @@ async def save_and_process_product_image(
         old_file_key=old_image_url
     )
     return {
+        "image_id": res["file_id"],
+        "file_id": res["file_id"],
         "image_url": res["url"],
         "thumb_url": res["thumb_url"],
-        "file_id": res["file_id"]
+        "medium_url": res["url"],
+        "variants": res["variants"]
     }
 
 
@@ -302,7 +353,7 @@ async def save_and_process_receipt_image(
     file: UploadFile,
     old_image_url: Optional[str] = None,
     tenant_id: str = "default"
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """Processes payment receipt captures to WebP and stores them in Supabase Storage."""
     res = await process_and_upload_image(
         file=file,
@@ -312,7 +363,11 @@ async def save_and_process_receipt_image(
         old_file_key=old_image_url
     )
     return {
+        "image_id": res["file_id"],
+        "file_id": res["file_id"],
         "receipt_url": res["url"],
+        "image_url": res["url"],
         "thumb_url": res["thumb_url"],
-        "file_id": res["file_id"]
+        "medium_url": res["url"],
+        "variants": res["variants"]
     }
