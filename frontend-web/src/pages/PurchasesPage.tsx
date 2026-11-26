@@ -537,7 +537,7 @@ export const PurchasesPage: React.FC = () => {
                             </>
                           ) : (
                             <>
-                              <svg className="w-11 h-11 text-blue-400 stroke-[1.4]" viewBox="0 0 48 48" fill="none" stroke="currentColor">
+                              <svg className="w-11 h-11 text-slate-300 group-hover:text-blue-500 transition-colors stroke-[1.4]" viewBox="0 0 48 48" fill="none" stroke="currentColor">
                                 <path d="M24 6 L40 15 L40 33 L24 42 L8 33 L8 15 Z" strokeLinejoin="round" />
                                 <path d="M24 6 L24 24 L40 15" strokeLinejoin="round" />
                                 <path d="M24 24 L8 15" strokeLinejoin="round" />
@@ -774,7 +774,7 @@ export const PurchasesPage: React.FC = () => {
           MOBILE FLOATING BOTTOM BAR (ACCESO RÁPIDO A ENTRADA DE LOTE)
       ======================================================== */}
       {activeTab === 'create' && cartItems.length > 0 && (
-        <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 px-4 py-3 flex items-center justify-between shadow-2xl">
+        <div className="lg:hidden fixed bottom-[58px] left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 px-4 py-3 flex items-center justify-between shadow-2xl">
           <div>
             <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
               {cartItems.length} producto{cartItems.length === 1 ? '' : 's'} en lote
