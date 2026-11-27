@@ -2083,23 +2083,22 @@ export const api = {
   },
 
   async uploadProductImage(file: File, oldImageUrl?: string | null): Promise<{ image_url: string; thumb_url?: string }> {
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const url = oldImageUrl 
-        ? `/api/v1/inventory/products/image?old_image_url=${encodeURIComponent(oldImageUrl)}`
-        : `/api/v1/inventory/products/image`;
-      const res = await fetch(url, {
-        method: 'POST',
-        body: formData
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // Offline fallback
+    const formData = new FormData();
+    formData.append('file', file);
+    const params = oldImageUrl && !oldImageUrl.startsWith('blob:')
+      ? `?old_image_url=${encodeURIComponent(oldImageUrl)}`
+      : '';
+    const url = `/api/v1/inventory/products/image${params}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: formData
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.detail || `Error al subir imagen (${res.status})`);
     }
-    return { image_url: URL.createObjectURL(file) };
+    return await res.json();
   },
 
   async uploadPaymentReceipt(file: File, oldReceiptUrl?: string | null): Promise<{ receipt_url: string; thumb_url?: string }> {
@@ -2875,6 +2874,9 @@ export function resolveImageUrl(
   const trimmed = urlOrId.trim();
   if (!trimmed) return null;
 
+  // Reject blob URLs (local object URLs that should never be persisted)
+  if (trimmed.startsWith('blob:')) return null;
+
   // 1. URLs remotas completas (Supabase Storage o CDN externo)
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     if (variant === 'thumb' && trimmed.includes('/medium_')) {
@@ -2883,6 +2885,7 @@ export function resolveImageUrl(
     if (variant === 'medium' && trimmed.includes('/thumb_')) {
       return trimmed.replace('/thumb_', '/medium_');
     }
+    // No variant prefix found – return as-is (single file at root e.g. medium_xxx.webp without /medium_/)
     return trimmed;
   }
 

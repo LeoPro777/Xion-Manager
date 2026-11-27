@@ -133,10 +133,13 @@ export const InventoryPage: React.FC = () => {
       if (res.image_url) {
         setFormImageUrl(res.image_url);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error al subir imagen de producto:', err);
+      alert(err?.message || 'Error al subir la imagen. Verifica tu conexión e intenta de nuevo.');
     } finally {
       setIsUploadingProductImage(false);
+      // Reset input so same file can be retried
+      if (productImageInputRef.current) productImageInputRef.current.value = '';
     }
   };
 
@@ -803,8 +806,8 @@ export const InventoryPage: React.FC = () => {
                     </td>
                     <td className="p-3.5">
                       <div className="flex items-center gap-2.5">
-                        {item.image_url ? (
-                          <img src={resolveImageUrl(item.image_url, 'thumb') || item.image_url} alt={item.name} className="w-9 h-9 rounded-lg object-cover border border-slate-800 shrink-0" />
+                        {item.image_url && !item.image_url.startsWith('blob:') ? (
+                          <img src={resolveImageUrl(item.image_url, 'thumb') || item.image_url} alt={item.name} className="w-9 h-9 rounded-lg object-cover border border-slate-800 shrink-0" onError={(e) => { const t = e.currentTarget; const fallback = resolveImageUrl(item.image_url!, 'medium') || item.image_url!; if (t.src !== fallback) t.src = fallback; else t.style.display='none'; }} />
                         ) : (
                           <div className="w-9 h-9 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0 text-slate-500">
                             <Package className="w-4 h-4" />
@@ -921,9 +924,9 @@ export const InventoryPage: React.FC = () => {
                     </span>
                   </div>
 
-                  {item.image_url ? (
+                  {item.image_url && !item.image_url.startsWith('blob:') ? (
                     <div className="h-32 w-full rounded-xl overflow-hidden mb-3 bg-slate-900">
-                      <img src={resolveImageUrl(item.image_url, 'medium') || item.image_url} alt={item.name} className="w-full h-full object-cover" />
+                      <img src={resolveImageUrl(item.image_url, 'medium') || item.image_url} alt={item.name} className="w-full h-full object-cover" onError={(e) => { const t = e.currentTarget; const fallback = item.image_url!; if (t.src !== fallback) t.src = fallback; else t.style.display='none'; }} />
                     </div>
                   ) : (
                     <div className="h-24 w-full rounded-xl mb-3 bg-slate-900/60 border border-slate-800/80 flex items-center justify-center text-slate-600">
@@ -1236,11 +1239,12 @@ export const InventoryPage: React.FC = () => {
                 </label>
                 <div className="flex items-center gap-3">
                   <div className="w-16 h-16 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center overflow-hidden shrink-0">
-                    {formImageUrl ? (
+                  {formImageUrl && !formImageUrl.startsWith('blob:') ? (
                       <img 
                         src={resolveImageUrl(formImageUrl, 'thumb') || formImageUrl} 
                         alt="Preview" 
-                        className="w-full h-full object-cover" 
+                        className="w-full h-full object-cover"
+                        onError={(e) => { const t = e.currentTarget; const fallback = formImageUrl; if (t.src !== fallback) t.src = fallback; else t.style.display='none'; }}
                       />
                     ) : (
                       <Package className="w-6 h-6 text-slate-600" />
